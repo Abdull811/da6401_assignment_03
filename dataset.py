@@ -121,29 +121,30 @@ class Multi30kDataset:
             processed.append((src_indices, tgt_indices))
 
         return processed
-    
-    def collate_fn(batch):
-        """
-        Pads variable-length sequences for DataLoader batching
-        """
 
-        src_batch = []
-        tgt_batch = []
 
-        for src, tgt in batch:
-            src_batch.append(torch.tensor(src))
-            tgt_batch.append(torch.tensor(tgt))
+def collate_fn(batch):
+    """
+    Pads variable-length sequences for DataLoader batching
+    """
 
-        src_batch = pad_sequence(
-            src_batch,
-            batch_first=True,
-            padding_value=1  # <pad>
-        )
+    src_batch = []
+    tgt_batch = []
 
-        tgt_batch = pad_sequence(
-            tgt_batch,
-            batch_first=True,
-            padding_value=1  # <pad>
-        )
+    for src, tgt in batch:
+        src_batch.append(torch.tensor(src))
+        tgt_batch.append(torch.tensor(tgt))
 
-        return src_batch, tgt_batch
+    src_batch = pad_sequence(
+        src_batch,
+        batch_first=True,
+        padding_value=1  # <pad>
+    )
+
+    tgt_batch = pad_sequence(
+        tgt_batch,
+        batch_first=True,
+        padding_value=1  # <pad>
+    )
+
+    return src_batch, tgt_batch
