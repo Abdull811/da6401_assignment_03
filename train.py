@@ -150,6 +150,14 @@ def run_epoch(
                 logits.size(-1)
             )
 
+            probs = torch.softmax(logits, dim=1)
+
+            confidence = probs.max(dim=1)[0].mean().item()
+
+            wandb.log({
+                "prediction_confidence": confidence
+            })
+
             tgt_output = tgt_output.contiguous().view(-1)
 
             loss = loss_fn(
@@ -161,6 +169,13 @@ def run_epoch(
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
+            for name, param in model.named_parameters():
+                if "W_q" in name or "W_k" in name:
+                    if param.grad is not None:
+                        wandb.log({
+                            f"grad_norm_{name}":
+                            param.grad.norm().item()
+                        })
 
             if scheduler is not None:
                 scheduler.step()
@@ -411,7 +426,7 @@ def save_checkpoint(
             "epoch": epoch,
             "model_state_dict": model.state_dict(),
             "optimizer_state_dict": optimizer.state_dict(),
-            "scheduler_state_dict": scheduler.state_dict(),
+            "scheduler_state_dict": scheduler.state_dict() if scheduler is not None else None,
             "model_config": {
                 "src_vocab_size": model.src_vocab_size,
                 "tgt_vocab_size": model.tgt_vocab_size,
@@ -512,6 +527,7 @@ def run_training_experiment() -> None:
             "dropout": 0.1,
             "warmup_steps": 4000,
             "learning_rate": 1.0,
+            "use_noam_scheduler": True, # False
             "label_smoothing": 0.1
         }
     )
@@ -578,11 +594,14 @@ def run_training_experiment() -> None:
     )
     
     # scheduler
-    scheduler = NoamScheduler(
-        optimizer=optimizer,
-        d_model=config.d_model,
-        warmup_steps=config.warmup_steps
-    )
+    if config.use_noam_scheduler:
+        scheduler = NoamScheduler(
+            optimizer=optimizer,
+            d_model=config.d_model,
+            warmup_steps=config.warmup_steps
+        )
+    else:
+        scheduler = None
     
     # loss function
     loss_fn = LabelSmoothingLoss(
@@ -595,6 +614,7 @@ def run_training_experiment() -> None:
     best_val_loss = float("inf")
 
     for epoch in range(config.epochs):
+        print(f"Epoch {epoch+1}/{config.epochs} started")
 
         train_loss = run_epoch(
             train_loader,
@@ -617,6 +637,12 @@ def run_training_experiment() -> None:
             is_train=False,
             device=device
         )
+
+        print(
+            f"Epoch {epoch+1}: "
+            f"Train Loss = {train_loss:.4f}, "
+            f"Val Loss = {val_loss:.4f}"
+        ) 
 
         wandb.log({
             "epoch": epoch,

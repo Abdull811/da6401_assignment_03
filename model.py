@@ -55,10 +55,12 @@ def scaled_dot_product_attention(
     """
     d_k = Q.size(-1)
 
-    scores = torch.matmul(
-        Q,
-        K.transpose(-2, -1)
-    ) / math.sqrt(d_k)
+    USE_SCALING = True # False
+
+    if USE_SCALING:
+        scores = torch.matmul(Q, K.transpose(-2, -1)) / math.sqrt(d_k)
+    else:
+        scores = torch.matmul(Q, K.transpose(-2, -1))
 
     if mask is not None:
         scores = scores.masked_fill(mask, float("-inf"))
@@ -189,7 +191,8 @@ class MultiHeadAttention(nn.Module):
         K = K.view(batch_size, -1, self.num_heads, self.d_k).transpose(1, 2)
         V = V.view(batch_size, -1, self.num_heads, self.d_k).transpose(1, 2)
 
-        x, _ = scaled_dot_product_attention(Q, K, V, mask)
+        x, attn = scaled_dot_product_attention(Q, K, V, mask)
+        self.attention_weights = attn
 
         x = self.dropout(x)
 
@@ -493,6 +496,7 @@ class Transformer(nn.Module):
         d_model:   int   = 512,
         N:         int   = 6,
         num_heads: int   = 8,
+        use_learned_positional = False,
         d_ff:      int   = 2048,
         dropout:   float = 0.1,
     ) -> None:
@@ -505,16 +509,20 @@ class Transformer(nn.Module):
         self.num_heads = num_heads
         self.d_ff = d_ff
         self.dropout_value = dropout
+        self.use_learned_positional = use_learned_positional
 
         # embeddings
         self.src_embedding = nn.Embedding(src_vocab_size, d_model)
         self.tgt_embedding = nn.Embedding(tgt_vocab_size, d_model)
 
         # positional encoding
-        self.positional_encoding = PositionalEncoding(
-            d_model,
-            dropout
-        )
+        if use_learned_positional:
+            self.position_embedding = nn.Embedding(5000, d_model)
+        else:
+            self.positional_encoding = PositionalEncoding(
+                d_model,
+                dropout
+            )
 
         # encoder
         encoder_layer = EncoderLayer(
@@ -568,7 +576,17 @@ class Transformer(nn.Module):
         """
     
         x = self.src_embedding(src) * math.sqrt(self.d_model)
-        x = self.positional_encoding(x)
+        # x = self.positional_encoding(x)
+        if self.use_learned_positional:
+            positions = torch.arange(
+                0,
+                src.size(1),
+                device=src.device
+            ).unsqueeze(0)
+
+            x = x + self.position_embedding(positions)
+        else:
+            x = self.positional_encoding(x)
         return self.encoder(x, src_mask)
 
     def decode(
@@ -591,7 +609,16 @@ class Transformer(nn.Module):
             logits : shape [batch, tgt_len, tgt_vocab_size]
         """
         x = self.tgt_embedding(tgt) * math.sqrt(self.d_model)
-        x = self.positional_encoding(x)
+        if self.use_learned_positional:
+            positions = torch.arange(
+                0,
+                tgt.size(1),
+                device=tgt.device
+            ).unsqueeze(0)
+
+            x = x + self.position_embedding(positions)
+        else:
+            x = self.positional_encoding(x)
         x = self.decoder(x, memory, src_mask, tgt_mask)
         return self.fc_out(x)
 
