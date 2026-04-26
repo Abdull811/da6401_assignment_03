@@ -344,9 +344,9 @@ def evaluate_bleu(
                 ]
 
                 # convert token ids → words
-                if hasattr(tgt_vocab, "itos"):
+                if isinstance(tgt_vocab, list):
                     pred_words = [
-                        tgt_vocab.itos[idx]
+                        tgt_vocab[idx]
                         for idx in pred_tokens
                         if idx < len(tgt_vocab.itos)
                     ]
@@ -666,11 +666,10 @@ def run_training_experiment() -> None:
 
     # final BLEU
     bleu = evaluate_bleu(
-        model,
-        test_loader,
-        train_data,
-        device=device
-    )
+          model,
+          test_loader,
+          train_data.tgt_itos,
+          device=device)
 
     wandb.log({
         "test_bleu": bleu
