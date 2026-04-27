@@ -24,13 +24,12 @@ import math
 
 from model import Transformer, make_src_mask, make_tgt_mask
 
-import wandb
-from dataset import Multi30kDataset, collate_fn
+wandb = None
 from lr_scheduler import NoamScheduler
 
 
 def safe_wandb_log(values: dict) -> None:
-    if wandb.run is not None:
+    if wandb is not None and wandb.run is not None:
         wandb.log(values)
 
 
@@ -136,6 +135,18 @@ def corpus_bleu_score(predictions, references, max_n=4) -> float:
     return bleu * 100
 
 
+def vocab_lookup_token(vocab, idx: int) -> str:
+    if hasattr(vocab, "itos"):
+        return vocab.itos[idx]
+    if hasattr(vocab, "tgt_itos"):
+        return vocab.tgt_itos[idx]
+    if hasattr(vocab, "lookup_token"):
+        return vocab.lookup_token(idx)
+    if isinstance(vocab, (list, tuple)):
+        return vocab[idx]
+    raise TypeError("tgt_vocab must provide itos, tgt_itos, lookup_token, or be a list")
+
+
 # ══════════════════════════════════════════════════════════════════════
 #   TRAINING LOOP  
 # ══════════════════════════════════════════════════════════════════════
@@ -218,8 +229,6 @@ def run_epoch(
         if is_train:
             optimizer.zero_grad()
             loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-            optimizer.step()
 
             step = getattr(run_epoch, "global_step", 0) + 1
             run_epoch.global_step = step
@@ -239,6 +248,9 @@ def run_epoch(
                     "grad_norm_k": sum(k_norms) / max(1, len(k_norms)),
                     "train_step": step,
                 })
+
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            optimizer.step()
 
             if scheduler is not None:
                 scheduler.step()
@@ -401,29 +413,14 @@ def evaluate_bleu(
                 ]
 
                 # convert token ids → words
-                if isinstance(tgt_vocab, list):
-                    pred_words = [
-                        tgt_vocab[idx]
-                        for idx in pred_tokens
-                        if idx < len(tgt_vocab.itos)
-                    ]
-
-                    tgt_words = [
-                        tgt_vocab.itos[idx]
-                        for idx in tgt_tokens
-                        if idx < len(tgt_vocab.itos)
-                    ]
-
-                else:
-                    pred_words = [
-                        tgt_vocab.lookup_token(idx)
-                        for idx in pred_tokens
-                    ]
-
-                    tgt_words = [
-                        tgt_vocab.lookup_token(idx)
-                        for idx in tgt_tokens
-                    ]
+                pred_words = [
+                    vocab_lookup_token(tgt_vocab, idx)
+                    for idx in pred_tokens
+                ]
+                tgt_words = [
+                    vocab_lookup_token(tgt_vocab, idx)
+                    for idx in tgt_tokens
+                ]
 
                 # BLEU format:
                 # predictions = ["this is good"]
@@ -564,6 +561,12 @@ def run_training_experiment() -> None:
                wandb.log({'test_bleu': bleu})
     """
     # TODO: implement full experiment
+    from dataset import Multi30kDataset, collate_fn
+    import wandb as wandb_module
+
+    global wandb
+    wandb = wandb_module
+
     # device
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
