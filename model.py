@@ -34,6 +34,7 @@ def scaled_dot_product_attention(
     K: torch.Tensor,
     V: torch.Tensor,
     mask: Optional[torch.Tensor] = None,
+    use_scaling: bool = True,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     """
     Compute Scaled Dot-Product Attention.
@@ -55,9 +56,7 @@ def scaled_dot_product_attention(
     """
     d_k = Q.size(-1)
 
-    USE_SCALING = True # False
-
-    if USE_SCALING:
+    if use_scaling:
         scores = torch.matmul(Q, K.transpose(-2, -1)) / math.sqrt(d_k)
     else:
         scores = torch.matmul(Q, K.transpose(-2, -1))
@@ -145,13 +144,20 @@ class MultiHeadAttention(nn.Module):
         dropout   (float): Dropout probability applied to attention weights.
     """
 
-    def __init__(self, d_model: int, num_heads: int, dropout: float = 0.1) -> None:
+    def __init__(
+        self,
+        d_model: int,
+        num_heads: int,
+        dropout: float = 0.1,
+        use_scaling: bool = True,
+    ) -> None:
         super().__init__()
         assert d_model % num_heads == 0, "d_model must be divisible by num_heads"
 
         self.d_model   = d_model
         self.num_heads = num_heads
         self.d_k       = d_model // num_heads   # depth per head
+        self.use_scaling = use_scaling
         
         self.W_q = nn.Linear(d_model, d_model)
         self.W_k = nn.Linear(d_model, d_model)
@@ -191,10 +197,10 @@ class MultiHeadAttention(nn.Module):
         K = K.view(batch_size, -1, self.num_heads, self.d_k).transpose(1, 2)
         V = V.view(batch_size, -1, self.num_heads, self.d_k).transpose(1, 2)
 
-        x, attn = scaled_dot_product_attention(Q, K, V, mask)
+        _, attn = scaled_dot_product_attention(Q, K, V, mask, self.use_scaling)
+        attn = self.dropout(attn)
+        x = torch.matmul(attn, V)
         self.attention_weights = attn
-
-        x = self.dropout(x)
 
         x = x.transpose(1, 2).contiguous()
         x = x.view(batch_size, -1, self.d_model)
@@ -309,13 +315,21 @@ class EncoderLayer(nn.Module):
         dropout   (float): Dropout probability.
     """
 
-    def __init__(self, d_model: int, num_heads: int, d_ff: int, dropout: float = 0.1) -> None:
+    def __init__(
+        self,
+        d_model: int,
+        num_heads: int,
+        d_ff: int,
+        dropout: float = 0.1,
+        use_scaling: bool = True,
+    ) -> None:
         super().__init__()
         # TODO:instantiate:
-        self.self_attn = MultiHeadAttention(d_model, num_heads, dropout)
+        self.self_attn = MultiHeadAttention(d_model, num_heads, dropout, use_scaling)
         self.feed_forward = PositionwiseFeedForward(d_model, d_ff, dropout)
         self.norm1 = nn.LayerNorm(d_model)
         self.norm2 = nn.LayerNorm(d_model)
+        self.dropout = nn.Dropout(dropout)
 
     def forward(self, x: torch.Tensor, src_mask: torch.Tensor) -> torch.Tensor:
         """
@@ -331,13 +345,13 @@ class EncoderLayer(nn.Module):
         attn_output = self.self_attn(x, x, x, src_mask)
 
         # add + norm
-        x = self.norm1(x + attn_output)
+        x = self.norm1(x + self.dropout(attn_output))
 
         # feed forward
         ff_output = self.feed_forward(x)
 
         # add + norm
-        x = self.norm2(x + ff_output)
+        x = self.norm2(x + self.dropout(ff_output))
 
         return x
 
@@ -360,14 +374,21 @@ class DecoderLayer(nn.Module):
         dropout   (float): Dropout probability.
     """
 
-    def __init__(self, d_model: int, num_heads: int, d_ff: int, dropout: float = 0.1) -> None:
+    def __init__(
+        self,
+        d_model: int,
+        num_heads: int,
+        d_ff: int,
+        dropout: float = 0.1,
+        use_scaling: bool = True,
+    ) -> None:
         super().__init__()
         # TODO: instantiate:
         # masked self attention
-        self.self_attn = MultiHeadAttention(d_model, num_heads, dropout)
+        self.self_attn = MultiHeadAttention(d_model, num_heads, dropout, use_scaling)
 
         # encoder-decoder attention
-        self.cross_attn = MultiHeadAttention(d_model, num_heads, dropout)
+        self.cross_attn = MultiHeadAttention(d_model, num_heads, dropout, use_scaling)
 
         # feed forward
         self.feed_forward = PositionwiseFeedForward(d_model, d_ff, dropout)
@@ -376,6 +397,7 @@ class DecoderLayer(nn.Module):
         self.norm1 = nn.LayerNorm(d_model)
         self.norm2 = nn.LayerNorm(d_model)
         self.norm3 = nn.LayerNorm(d_model)
+        self.dropout = nn.Dropout(dropout)
 
     def forward(
         self,
@@ -396,15 +418,15 @@ class DecoderLayer(nn.Module):
         """
         # masked self attention
         attn1 = self.self_attn(x, x, x, tgt_mask)
-        x = self.norm1(x + attn1)
+        x = self.norm1(x + self.dropout(attn1))
 
         # cross attention
         attn2 = self.cross_attn(x, memory, memory, src_mask)
-        x = self.norm2(x + attn2)
+        x = self.norm2(x + self.dropout(attn2))
 
         # feed forward
         ff = self.feed_forward(x)
-        x = self.norm3(x + ff)
+        x = self.norm3(x + self.dropout(ff))
 
         return x
 
@@ -497,6 +519,7 @@ class Transformer(nn.Module):
         N:         int   = 6,
         num_heads: int   = 8,
         use_learned_positional = False,
+        use_scaling: bool = True,
         d_ff:      int   = 2048,
         dropout:   float = 0.1,
     ) -> None:
@@ -510,6 +533,7 @@ class Transformer(nn.Module):
         self.d_ff = d_ff
         self.dropout_value = dropout
         self.use_learned_positional = use_learned_positional
+        self.use_scaling = use_scaling
 
         # embeddings
         self.src_embedding = nn.Embedding(src_vocab_size, d_model)
@@ -517,7 +541,9 @@ class Transformer(nn.Module):
 
         # positional encoding
         if use_learned_positional:
-            self.position_embedding = nn.Embedding(5000, d_model)
+            self.src_position_embedding = nn.Embedding(5000, d_model)
+            self.tgt_position_embedding = nn.Embedding(5000, d_model)
+            self.position_dropout = nn.Dropout(dropout)
         else:
             self.positional_encoding = PositionalEncoding(
                 d_model,
@@ -529,7 +555,8 @@ class Transformer(nn.Module):
             d_model,
             num_heads,
             d_ff,
-            dropout
+            dropout,
+            use_scaling
         )
 
         self.encoder = Encoder(
@@ -542,7 +569,8 @@ class Transformer(nn.Module):
             d_model,
             num_heads,
             d_ff,
-            dropout
+            dropout,
+            use_scaling
         )
 
         self.decoder = Decoder(
@@ -584,7 +612,8 @@ class Transformer(nn.Module):
                 device=src.device
             ).unsqueeze(0)
 
-            x = x + self.position_embedding(positions)
+            x = x + self.src_position_embedding(positions)
+            x = self.position_dropout(x)
         else:
             x = self.positional_encoding(x)
         return self.encoder(x, src_mask)
@@ -616,7 +645,8 @@ class Transformer(nn.Module):
                 device=tgt.device
             ).unsqueeze(0)
 
-            x = x + self.position_embedding(positions)
+            x = x + self.tgt_position_embedding(positions)
+            x = self.position_dropout(x)
         else:
             x = self.positional_encoding(x)
         x = self.decoder(x, memory, src_mask, tgt_mask)

@@ -19,12 +19,20 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
 from typing import Optional
+from collections import Counter
+import math
 
 from model import Transformer, make_src_mask, make_tgt_mask
 
 import wandb
 from dataset import Multi30kDataset, collate_fn
 from lr_scheduler import NoamScheduler
+
+
+def safe_wandb_log(values: dict) -> None:
+    if wandb.run is not None:
+        wandb.log(values)
+
 
 # ══════════════════════════════════════════════════════════════════════
 #  LABEL SMOOTHING LOSS  
@@ -77,14 +85,55 @@ class LabelSmoothingLoss(nn.Module):
         mask = (target == self.pad_idx)
         true_dist[mask] = 0
 
-        loss = torch.mean(
-            torch.sum(
-                -true_dist * torch.log_softmax(logits, dim=1),
-                dim=1
-            )
+        token_loss = torch.sum(
+            -true_dist * torch.log_softmax(logits, dim=1),
+            dim=1
         )
 
-        return loss
+        non_pad = target != self.pad_idx
+        return token_loss[non_pad].mean()
+
+
+def corpus_bleu_score(predictions, references, max_n=4) -> float:
+    clipped_matches = [0] * max_n
+    total_counts = [0] * max_n
+    pred_len = 0
+    ref_len = 0
+
+    for pred_tokens, ref_tokens in zip(predictions, references):
+        pred_len += len(pred_tokens)
+        ref_len += len(ref_tokens)
+
+        for n in range(1, max_n + 1):
+            pred_ngrams = Counter(
+                tuple(pred_tokens[i:i + n])
+                for i in range(max(0, len(pred_tokens) - n + 1))
+            )
+            ref_ngrams = Counter(
+                tuple(ref_tokens[i:i + n])
+                for i in range(max(0, len(ref_tokens) - n + 1))
+            )
+
+            clipped_matches[n - 1] += sum(
+                min(count, ref_ngrams[ngram])
+                for ngram, count in pred_ngrams.items()
+            )
+            total_counts[n - 1] += sum(pred_ngrams.values())
+
+    if pred_len == 0:
+        return 0.0
+
+    smooth = 1e-9
+    precisions = [
+        (clipped_matches[i] + smooth) / (total_counts[i] + smooth)
+        for i in range(max_n)
+    ]
+
+    brevity_penalty = 1.0 if pred_len > ref_len else math.exp(1 - ref_len / pred_len)
+    bleu = brevity_penalty * math.exp(
+        sum(math.log(p) for p in precisions) / max_n
+    )
+    return bleu * 100
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -150,15 +199,16 @@ def run_epoch(
                 logits.size(-1)
             )
 
-            probs = torch.softmax(logits, dim=1)
-
-            confidence = probs.max(dim=1)[0].mean().item()
-
-            wandb.log({
-                "prediction_confidence": confidence
-            })
-
             tgt_output = tgt_output.contiguous().view(-1)
+
+            probs = torch.softmax(logits, dim=1)
+            non_pad = tgt_output != 1
+            correct_token_probs = probs.gather(1, tgt_output.unsqueeze(1)).squeeze(1)
+            if non_pad.any():
+                confidence = correct_token_probs[non_pad].mean().item()
+                safe_wandb_log({
+                    "prediction_confidence": confidence
+                })
 
             loss = loss_fn(
                 logits,
@@ -168,14 +218,27 @@ def run_epoch(
         if is_train:
             optimizer.zero_grad()
             loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             optimizer.step()
-            for name, param in model.named_parameters():
-                if "W_q" in name or "W_k" in name:
-                    if param.grad is not None:
-                        wandb.log({
-                            f"grad_norm_{name}":
-                            param.grad.norm().item()
-                        })
+
+            step = getattr(run_epoch, "global_step", 0) + 1
+            run_epoch.global_step = step
+
+            if step <= 1000:
+                q_norms = []
+                k_norms = []
+                for name, param in model.named_parameters():
+                    if param.grad is None:
+                        continue
+                    if ".W_q." in name:
+                        q_norms.append(param.grad.norm().item())
+                    elif ".W_k." in name:
+                        k_norms.append(param.grad.norm().item())
+                safe_wandb_log({
+                    "grad_norm_q": sum(q_norms) / max(1, len(q_norms)),
+                    "grad_norm_k": sum(k_norms) / max(1, len(k_norms)),
+                    "train_step": step,
+                })
 
             if scheduler is not None:
                 scheduler.step()
@@ -196,7 +259,7 @@ def greedy_decode(
     src_mask: torch.Tensor,
     max_len: int,
     start_symbol: int,
-    end_symbol: int,
+    end_symbol: int = 3,
     device: str = "cpu",
 ) -> torch.Tensor:
     """
@@ -288,13 +351,7 @@ def evaluate_bleu(
         bleu_score : Corpus-level BLEU (float, range 0–100).
 
     """
-    # TODO: Task 3 — loop test set, decode, compute and return BLEU
-    import evaluate
-
     model.eval()
-
-    # load BLEU metric
-    bleu = evaluate.load("bleu")
 
     predictions = []
     references = []
@@ -371,16 +428,10 @@ def evaluate_bleu(
                 # BLEU format:
                 # predictions = ["this is good"]
                 # references = [["this is good"]]
-                predictions.append(" ".join(pred_words))
-                references.append([" ".join(tgt_words)])
+                predictions.append(pred_words)
+                references.append(tgt_words)
 
-    # compute BLEU score
-    result = bleu.compute(
-        predictions=predictions,
-        references=references
-    )
-
-    bleu_score = result["bleu"] * 100
+    bleu_score = corpus_bleu_score(predictions, references)
 
     print(f"Test BLEU Score: {bleu_score:.2f}")
 
@@ -435,6 +486,8 @@ def save_checkpoint(
                 "num_heads": model.num_heads,
                 "d_ff": model.d_ff,
                 "dropout": model.dropout_value,
+                "use_learned_positional": model.use_learned_positional,
+                "use_scaling": model.use_scaling,
             },
         },
         path
@@ -528,7 +581,12 @@ def run_training_experiment() -> None:
             "warmup_steps": 4000,
             "learning_rate": 1.0,
             "use_noam_scheduler": True, # False
-            "label_smoothing": 0.1
+            "fixed_learning_rate": 1e-4,
+            "label_smoothing": 0.1,
+            "use_scaling": True,
+            "use_learned_positional": False,
+            "min_freq": 2,
+            "max_vocab_size": None,
         }
     )
 
@@ -536,7 +594,11 @@ def run_training_experiment() -> None:
 
 
     # dataset
-    train_data = Multi30kDataset(split="train")
+    train_data = Multi30kDataset(
+        split="train",
+        min_freq=config.min_freq,
+        max_vocab_size=config.max_vocab_size,
+    )
     val_data = Multi30kDataset(
         split="validation",
         src_vocab=train_data.src_vocab,
@@ -554,21 +616,21 @@ def run_training_experiment() -> None:
     )
 
     train_loader = DataLoader(
-        train_data.processed_data,
+        train_data,
         batch_size=config.batch_size,
         shuffle=True,
         collate_fn=collate_fn
     )
 
     val_loader = DataLoader(
-        val_data.processed_data,
+        val_data,
         batch_size=config.batch_size,
         shuffle=False,
         collate_fn=collate_fn
     )
 
     test_loader = DataLoader(
-        test_data.processed_data,
+        test_data,
         batch_size=config.batch_size,
         shuffle=False,
         collate_fn=collate_fn
@@ -582,13 +644,15 @@ def run_training_experiment() -> None:
         N=config.num_layers,
         num_heads=config.num_heads,
         d_ff=config.d_ff,
-        dropout=config.dropout
+        dropout=config.dropout,
+        use_learned_positional=config.use_learned_positional,
+        use_scaling=config.use_scaling,
     ).to(device)
 
     # optimizer
     optimizer = torch.optim.Adam(
         model.parameters(),
-        lr=config.learning_rate,
+        lr=config.learning_rate if config.use_noam_scheduler else config.fixed_learning_rate,
         betas=(0.9, 0.98),
         eps=1e-9
     )
@@ -644,7 +708,7 @@ def run_training_experiment() -> None:
             f"Val Loss = {val_loss:.4f}"
         ) 
 
-        wandb.log({
+        safe_wandb_log({
             "epoch": epoch,
             "train_loss": train_loss,
             "val_loss": val_loss
@@ -664,6 +728,8 @@ def run_training_experiment() -> None:
 
             print("Best model saved.")
 
+    load_checkpoint("best_checkpoint.pt", model)
+
     # final BLEU
     bleu = evaluate_bleu(
         model,
@@ -672,7 +738,7 @@ def run_training_experiment() -> None:
         device=device
     )
 
-    wandb.log({
+    safe_wandb_log({
         "test_bleu": bleu
     })
 

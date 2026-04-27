@@ -11,12 +11,16 @@ class Multi30kDataset:
         src_vocab=None,
         tgt_vocab=None,
         src_itos=None,
-        tgt_itos=None
+        tgt_itos=None,
+        min_freq=2,
+        max_vocab_size=None,
     ):
         """
         Loads the Multi30k dataset and prepares tokenizers.
         """
         self.split = split
+        self.min_freq = min_freq
+        self.max_vocab_size = max_vocab_size
         # Load dataset from Hugging Face
         # https://huggingface.co/datasets/bentrevett/multi30k
         # TODO: Load dataset, load spacy tokenizers for de and en
@@ -53,6 +57,12 @@ class Multi30kDataset:
     def tokenize_en(self, text):
         return [tok.text.lower() for tok in self.spacy_en.tokenizer(text)]
 
+    def __len__(self):
+        return len(self.processed_data)
+
+    def __getitem__(self, idx):
+        return self.processed_data[idx]
+
 
     def build_vocab(self):
         """
@@ -74,9 +84,23 @@ class Multi30kDataset:
         self.src_itos = self.special_tokens.copy()
         self.tgt_itos = self.special_tokens.copy()
 
-        # add normal words
-        self.src_itos += list(src_counter.keys())
-        self.tgt_itos += list(tgt_counter.keys())
+        src_tokens = [
+            token for token, freq in src_counter.most_common()
+            if freq >= self.min_freq
+        ]
+        tgt_tokens = [
+            token for token, freq in tgt_counter.most_common()
+            if freq >= self.min_freq
+        ]
+
+        if self.max_vocab_size is not None:
+            normal_slots = max(0, self.max_vocab_size - len(self.special_tokens))
+            src_tokens = src_tokens[:normal_slots]
+            tgt_tokens = tgt_tokens[:normal_slots]
+
+        # add normal words sorted by frequency for reproducibility
+        self.src_itos += src_tokens
+        self.tgt_itos += tgt_tokens
 
         self.src_vocab = {
             token: idx for idx, token in enumerate(self.src_itos)
