@@ -237,7 +237,9 @@ def run_epoch(
             tgt_output = tgt_output.contiguous().view(-1)
 
             non_pad = tgt_output != 1
-            if non_pad.any():
+            step_for_logging = getattr(run_epoch, "global_step", 0)
+            should_log_batch = (not is_train) or step_for_logging % 50 == 0
+            if non_pad.any() and should_log_batch:
                 probs = torch.softmax(logits[non_pad], dim=1)
                 correct_token_probs = probs.gather(
                     1,
@@ -516,6 +518,7 @@ def save_checkpoint(
                 "dropout": model.dropout_value,
                 "use_learned_positional": model.use_learned_positional,
                 "use_scaling": model.use_scaling,
+                "tie_embeddings": model.tie_embeddings,
             },
         },
         path
@@ -618,6 +621,7 @@ def run_training_experiment() -> None:
         "label_smoothing": 0.1,
         "use_scaling": True,
         "use_learned_positional": False,
+        "tie_embeddings": True,
         "min_freq": 2,
         "max_vocab_size": None,
         "num_workers": 0,
@@ -693,6 +697,7 @@ def run_training_experiment() -> None:
         dropout=config.dropout,
         use_learned_positional=config.use_learned_positional,
         use_scaling=config.use_scaling,
+        tie_embeddings=config.tie_embeddings,
     ).to(device)
 
     # optimizer

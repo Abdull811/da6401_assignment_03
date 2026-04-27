@@ -520,6 +520,7 @@ class Transformer(nn.Module):
         num_heads: int   = 8,
         use_learned_positional = False,
         use_scaling: bool = True,
+        tie_embeddings: bool = True,
         d_ff:      int   = 2048,
         dropout:   float = 0.1,
     ) -> None:
@@ -534,10 +535,11 @@ class Transformer(nn.Module):
         self.dropout_value = dropout
         self.use_learned_positional = use_learned_positional
         self.use_scaling = use_scaling
+        self.tie_embeddings = tie_embeddings
 
         # embeddings
-        self.src_embedding = nn.Embedding(src_vocab_size, d_model)
-        self.tgt_embedding = nn.Embedding(tgt_vocab_size, d_model)
+        self.src_embedding = nn.Embedding(src_vocab_size, d_model, padding_idx=1)
+        self.tgt_embedding = nn.Embedding(tgt_vocab_size, d_model, padding_idx=1)
 
         # positional encoding
         if use_learned_positional:
@@ -583,6 +585,18 @@ class Transformer(nn.Module):
             d_model,
             tgt_vocab_size
         )
+
+        self._reset_parameters()
+        with torch.no_grad():
+            self.src_embedding.weight[1].zero_()
+            self.tgt_embedding.weight[1].zero_()
+        if tie_embeddings:
+            self.fc_out.weight = self.tgt_embedding.weight
+
+    def _reset_parameters(self) -> None:
+        for param in self.parameters():
+            if param.dim() > 1:
+                nn.init.xavier_uniform_(param)
 
 
     # ── AUTOGRADER HOOKS ── keep these signatures exactly ─────────────
