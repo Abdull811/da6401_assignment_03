@@ -136,14 +136,16 @@ def corpus_bleu_score(predictions, references, max_n=4) -> float:
 
 
 def vocab_lookup_token(vocab, idx: int) -> str:
+    if idx < 0:
+        return "<unk>"
     if hasattr(vocab, "itos"):
-        return vocab.itos[idx]
+        return vocab.itos[idx] if idx < len(vocab.itos) else "<unk>"
     if hasattr(vocab, "tgt_itos"):
-        return vocab.tgt_itos[idx]
+        return vocab.tgt_itos[idx] if idx < len(vocab.tgt_itos) else "<unk>"
+    if isinstance(vocab, (list, tuple)):
+        return vocab[idx] if idx < len(vocab) else "<unk>"
     if hasattr(vocab, "lookup_token"):
         return vocab.lookup_token(idx)
-    if isinstance(vocab, (list, tuple)):
-        return vocab[idx]
     raise TypeError("tgt_vocab must provide itos, tgt_itos, lookup_token, or be a list")
 
 
