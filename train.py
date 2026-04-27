@@ -21,6 +21,8 @@ from torch.utils.data import DataLoader
 from typing import Optional
 from collections import Counter
 import math
+import os
+from types import SimpleNamespace
 
 from model import Transformer, make_src_mask, make_tgt_mask
 
@@ -31,6 +33,18 @@ from lr_scheduler import NoamScheduler
 def safe_wandb_log(values: dict) -> None:
     if wandb is not None and wandb.run is not None:
         wandb.log(values)
+
+
+def init_wandb(project: str, config: dict):
+    global wandb
+    if wandb is None:
+        return None
+    try:
+        return wandb.init(project=project, config=config)
+    except Exception as exc:
+        print(f"Warning: W&B init failed ({exc}). Continuing with W&B disabled.")
+        wandb = None
+        return None
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -66,6 +80,9 @@ class LabelSmoothingLoss(nn.Module):
             Scalar loss value.
         """
         # TODO: Task 3.1
+        if logits.numel() == 0:
+            return logits.sum()
+
         confidence = 1.0 - self.smoothing
 
         true_dist = torch.zeros_like(logits)
@@ -90,6 +107,8 @@ class LabelSmoothingLoss(nn.Module):
         )
 
         non_pad = target != self.pad_idx
+        if not non_pad.any():
+            return token_loss.sum() * 0.0
         return token_loss[non_pad].mean()
 
 
@@ -122,11 +141,14 @@ def corpus_bleu_score(predictions, references, max_n=4) -> float:
     if pred_len == 0:
         return 0.0
 
-    smooth = 1e-9
-    precisions = [
-        (clipped_matches[i] + smooth) / (total_counts[i] + smooth)
-        for i in range(max_n)
-    ]
+    precisions = []
+    for i in range(max_n):
+        if total_counts[i] == 0:
+            precisions.append(1.0)
+        elif clipped_matches[i] == 0:
+            precisions.append(1e-9)
+        else:
+            precisions.append(clipped_matches[i] / total_counts[i])
 
     brevity_penalty = 1.0 if pred_len > ref_len else math.exp(1 - ref_len / pred_len)
     bleu = brevity_penalty * math.exp(
@@ -214,11 +236,14 @@ def run_epoch(
 
             tgt_output = tgt_output.contiguous().view(-1)
 
-            probs = torch.softmax(logits, dim=1)
             non_pad = tgt_output != 1
-            correct_token_probs = probs.gather(1, tgt_output.unsqueeze(1)).squeeze(1)
             if non_pad.any():
-                confidence = correct_token_probs[non_pad].mean().item()
+                probs = torch.softmax(logits[non_pad], dim=1)
+                correct_token_probs = probs.gather(
+                    1,
+                    tgt_output[non_pad].unsqueeze(1)
+                ).squeeze(1)
+                confidence = correct_token_probs.mean().item()
                 safe_wandb_log({
                     "prediction_confidence": confidence
                 })
@@ -404,13 +429,13 @@ def evaluate_bleu(
 
                 # remove special tokens from prediction
                 pred_tokens = [
-                    token for token in pred_tokens
+                    int(token) for token in pred_tokens
                     if token not in [start_symbol, end_symbol, pad_idx]
                 ]
 
                 # remove special tokens from target
                 tgt_tokens = [
-                    token for token in tgt
+                    int(token) for token in tgt
                     if token not in [start_symbol, end_symbol, pad_idx]
                 ]
 
@@ -471,6 +496,10 @@ def save_checkpoint(
          'd_ff': ..., 'dropout': ...}
     """
     # TODO: implement using torch.save({...}, path)
+    directory = os.path.dirname(path)
+    if directory:
+        os.makedirs(directory, exist_ok=True)
+
     torch.save(
         {
             "epoch": epoch,
@@ -498,6 +527,7 @@ def load_checkpoint(
     model: Transformer,
     optimizer: Optional[torch.optim.Optimizer] = None,
     scheduler=None,
+    device: str = "cpu",
 ) -> int:
     """
     Restore model (and optionally optimizer/scheduler) state from disk.
@@ -515,19 +545,19 @@ def load_checkpoint(
     # TODO: implement restore logic
     checkpoint = torch.load(
         path,
-        map_location="cpu"
+        map_location=device
     )
 
     model.load_state_dict(
         checkpoint["model_state_dict"]
     )
 
-    if optimizer is not None:
+    if optimizer is not None and checkpoint.get("optimizer_state_dict") is not None:
         optimizer.load_state_dict(
             checkpoint["optimizer_state_dict"]
         )
 
-    if scheduler is not None:
+    if scheduler is not None and checkpoint.get("scheduler_state_dict") is not None:
         scheduler.load_state_dict(
             checkpoint["scheduler_state_dict"]
         )
@@ -573,29 +603,34 @@ def run_training_experiment() -> None:
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
     # W&B config
-    wandb.init(
+    default_config = {
+        "batch_size": 32,
+        "epochs": 20,
+        "d_model": 512,
+        "num_layers": 6,
+        "num_heads": 8,
+        "d_ff": 2048,
+        "dropout": 0.1,
+        "warmup_steps": 4000,
+        "learning_rate": 1.0,
+        "use_noam_scheduler": True, # False
+        "fixed_learning_rate": 1e-4,
+        "label_smoothing": 0.1,
+        "use_scaling": True,
+        "use_learned_positional": False,
+        "min_freq": 2,
+        "max_vocab_size": None,
+        "num_workers": 0,
+        "checkpoint_path": "best_checkpoint.pt",
+        "max_decode_len": 80,
+    }
+
+    run = init_wandb(
         project="da6401_Assigment_03_Weight_&_Bias",
-        config={
-            "batch_size": 32,
-            "epochs": 10,
-            "d_model": 512,
-            "num_layers": 6,
-            "num_heads": 8,
-            "d_ff": 2048,
-            "dropout": 0.1,
-            "warmup_steps": 4000,
-            "learning_rate": 1.0,
-            "use_noam_scheduler": True, # False
-            "fixed_learning_rate": 1e-4,
-            "label_smoothing": 0.1,
-            "use_scaling": True,
-            "use_learned_positional": False,
-            "min_freq": 2,
-            "max_vocab_size": None,
-        }
+        config=default_config
     )
 
-    config = wandb.config
+    config = wandb.config if run is not None else SimpleNamespace(**default_config)
 
 
     # dataset
@@ -624,21 +659,27 @@ def run_training_experiment() -> None:
         train_data,
         batch_size=config.batch_size,
         shuffle=True,
-        collate_fn=collate_fn
+        collate_fn=collate_fn,
+        num_workers=config.num_workers,
+        pin_memory=(device == "cuda")
     )
 
     val_loader = DataLoader(
         val_data,
         batch_size=config.batch_size,
         shuffle=False,
-        collate_fn=collate_fn
+        collate_fn=collate_fn,
+        num_workers=config.num_workers,
+        pin_memory=(device == "cuda")
     )
 
     test_loader = DataLoader(
         test_data,
         batch_size=config.batch_size,
         shuffle=False,
-        collate_fn=collate_fn
+        collate_fn=collate_fn,
+        num_workers=config.num_workers,
+        pin_memory=(device == "cuda")
     )
     
     # model
@@ -728,19 +769,24 @@ def run_training_experiment() -> None:
                 optimizer,
                 scheduler,
                 epoch,
-                path="best_checkpoint.pt"
+                path=config.checkpoint_path
             )
 
             print("Best model saved.")
 
-    load_checkpoint("best_checkpoint.pt", model)
+    if os.path.exists(config.checkpoint_path):
+        load_checkpoint(config.checkpoint_path, model, device=device)
+        model.to(device)
+    else:
+        print("Warning: best checkpoint was not found; evaluating current model.")
 
     # final BLEU
     bleu = evaluate_bleu(
           model,
           test_loader,
           train_data.tgt_itos,
-          device=device)
+          device=device,
+          max_len=config.max_decode_len)
 
     safe_wandb_log({
         "test_bleu": bleu
@@ -748,7 +794,8 @@ def run_training_experiment() -> None:
 
     print(f"Final BLEU Score: {bleu:.2f}")
 
-    wandb.finish()        
+    if wandb is not None and wandb.run is not None:
+        wandb.finish()
 
 
 if __name__ == "__main__":

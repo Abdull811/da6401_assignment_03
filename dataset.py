@@ -4,6 +4,17 @@ from collections import Counter
 import torch
 from torch.nn.utils.rnn import pad_sequence
 
+
+def load_spacy_tokenizer(model_name, language_code):
+    try:
+        return spacy.load(model_name)
+    except OSError:
+        print(
+            f"Warning: spaCy model '{model_name}' is not installed. "
+            f"Falling back to spacy.blank('{language_code}')."
+        )
+        return spacy.blank(language_code)
+
 class Multi30kDataset:
     def __init__(
         self,
@@ -27,8 +38,8 @@ class Multi30kDataset:
         self.dataset = load_dataset("bentrevett/multi30k", split=split)
 
         # load spacy tokenizers
-        self.spacy_de = spacy.load("de_core_news_sm")
-        self.spacy_en = spacy.load("en_core_web_sm")
+        self.spacy_de = load_spacy_tokenizer("de_core_news_sm", "de")
+        self.spacy_en = load_spacy_tokenizer("en_core_web_sm", "en")
 
         # special tokens
         self.special_tokens = ["<unk>", "<pad>", "<sos>", "<eos>"]
@@ -121,6 +132,9 @@ class Multi30kDataset:
         unk_idx = 0
         sos_idx = 2
         eos_idx = 3
+
+        if self.src_vocab is None or self.tgt_vocab is None:
+            raise ValueError("Validation/test datasets require src_vocab and tgt_vocab.")
 
         for item in self.dataset:
             src_tokens = self.tokenize_de(item["de"])
