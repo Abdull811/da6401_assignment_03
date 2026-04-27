@@ -23,6 +23,7 @@ from collections import Counter
 import math
 import os
 from types import SimpleNamespace
+import inspect
 
 from model import Transformer, make_src_mask, make_tgt_mask
 
@@ -45,6 +46,24 @@ def init_wandb(project: str, config: dict):
         print(f"Warning: W&B init failed ({exc}). Continuing with W&B disabled.")
         wandb = None
         return None
+
+
+def build_multi30k_dataset(dataset_cls, split: str, **kwargs):
+    signature = inspect.signature(dataset_cls.__init__)
+    accepted = set(signature.parameters)
+    filtered_kwargs = {
+        key: value for key, value in kwargs.items()
+        if key in accepted
+    }
+    return dataset_cls(split=split, **filtered_kwargs)
+
+
+def dataloader_source(dataset):
+    if hasattr(dataset, "__len__") and hasattr(dataset, "__getitem__"):
+        return dataset
+    if hasattr(dataset, "processed_data"):
+        return dataset.processed_data
+    return dataset
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -638,12 +657,14 @@ def run_training_experiment() -> None:
 
 
     # dataset
-    train_data = Multi30kDataset(
+    train_data = build_multi30k_dataset(
+        Multi30kDataset,
         split="train",
         min_freq=config.min_freq,
         max_vocab_size=config.max_vocab_size,
     )
-    val_data = Multi30kDataset(
+    val_data = build_multi30k_dataset(
+        Multi30kDataset,
         split="validation",
         src_vocab=train_data.src_vocab,
         tgt_vocab=train_data.tgt_vocab,
@@ -651,7 +672,8 @@ def run_training_experiment() -> None:
         tgt_itos=train_data.tgt_itos
     )
 
-    test_data = Multi30kDataset(
+    test_data = build_multi30k_dataset(
+        Multi30kDataset,
         split="test",
         src_vocab=train_data.src_vocab,
         tgt_vocab=train_data.tgt_vocab,
@@ -660,7 +682,7 @@ def run_training_experiment() -> None:
     )
 
     train_loader = DataLoader(
-        train_data,
+        dataloader_source(train_data),
         batch_size=config.batch_size,
         shuffle=True,
         collate_fn=collate_fn,
@@ -669,7 +691,7 @@ def run_training_experiment() -> None:
     )
 
     val_loader = DataLoader(
-        val_data,
+        dataloader_source(val_data),
         batch_size=config.batch_size,
         shuffle=False,
         collate_fn=collate_fn,
@@ -678,7 +700,7 @@ def run_training_experiment() -> None:
     )
 
     test_loader = DataLoader(
-        test_data,
+        dataloader_source(test_data),
         batch_size=config.batch_size,
         shuffle=False,
         collate_fn=collate_fn,
