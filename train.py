@@ -281,6 +281,9 @@ def run_epoch(
             )
 
         if is_train:
+            if not torch.isfinite(loss):
+                raise RuntimeError("Non-finite training loss encountered.")
+
             optimizer.zero_grad()
             loss.backward()
 
@@ -303,7 +306,9 @@ def run_epoch(
                     "train_step": step,
                 })
 
-            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            if not torch.isfinite(grad_norm):
+                raise RuntimeError("Non-finite gradient norm encountered.")
             optimizer.step()
 
             if scheduler is not None:
@@ -635,14 +640,14 @@ def run_training_experiment() -> None:
     # W&B config
     default_config = {
         "batch_size": 32,
-        "epochs": 20,
+        "epochs": 30,
         "d_model": 512,
         "num_layers": 6,
         "num_heads": 8,
         "d_ff": 2048,
         "dropout": 0.1,
-        "warmup_steps": 4000,
-        "learning_rate": 0.5,
+        "warmup_steps": 8000,
+        "learning_rate": 0.2,
         "use_noam_scheduler": True, # False
         "fixed_learning_rate": 1e-4,
         "label_smoothing": 0.1,
@@ -654,8 +659,8 @@ def run_training_experiment() -> None:
         "num_workers": 0,
         "checkpoint_path": "best_checkpoint.pt",
         "max_decode_len": 80,
-        "early_stop_patience": 4,
-        "divergence_factor": 1.75,
+        "early_stop_patience": 3,
+        "divergence_factor": 1.35,
     }
 
     run = init_wandb(
@@ -665,6 +670,13 @@ def run_training_experiment() -> None:
 
     config = wandb.config if run is not None else SimpleNamespace(**default_config)
 
+    print(
+        "Training config: "
+        f"lr={config.learning_rate}, warmup={config.warmup_steps}, "
+        f"epochs={config.epochs}, batch_size={config.batch_size}, "
+        f"tie_embeddings={config.tie_embeddings}, "
+        f"divergence_factor={config.divergence_factor}"
+    )
 
     # dataset
     train_data = build_multi30k_dataset(
@@ -791,6 +803,10 @@ def run_training_experiment() -> None:
             f"Train Loss = {train_loss:.4f}, "
             f"Val Loss = {val_loss:.4f}"
         ) 
+
+        if not math.isfinite(train_loss) or not math.isfinite(val_loss):
+            print("Non-finite loss detected; stopping and keeping best checkpoint.")
+            break
 
         safe_wandb_log({
             "epoch": epoch,
