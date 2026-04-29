@@ -24,6 +24,7 @@ import math
 import os
 from types import SimpleNamespace
 import inspect
+from contextlib import nullcontext
 
 from model import Transformer, make_src_mask, make_tgt_mask
 
@@ -33,7 +34,10 @@ from lr_scheduler import NoamScheduler
 
 def safe_wandb_log(values: dict) -> None:
     if wandb is not None and wandb.run is not None:
-        wandb.log(values)
+        try:
+            wandb.log(values)
+        except Exception as exc:
+            print(f"Warning: W&B log failed ({exc}). Continuing.")
 
 
 def init_wandb(project: str, config: dict):
@@ -228,11 +232,13 @@ def run_epoch(
 
     total_loss = 0
 
+    grad_context = nullcontext() if is_train else torch.no_grad()
+
     for batch in data_iter:
         src, tgt = batch
 
-        src = src.to(device)
-        tgt = tgt.to(device)
+        src = src.to(device, non_blocking=True)
+        tgt = tgt.to(device, non_blocking=True)
 
         tgt_input = tgt[:, :-1]
         tgt_output = tgt[:, 1:]
@@ -240,7 +246,7 @@ def run_epoch(
         src_mask = make_src_mask(src)
         tgt_mask = make_tgt_mask(tgt_input)
 
-        with torch.set_grad_enabled(is_train):
+        with grad_context:
             logits = model(
                 src,
                 tgt_input,
@@ -436,11 +442,13 @@ def evaluate_bleu(
                 src_mask = make_src_mask(src)
 
                 # generate prediction using greedy decoding
+                sentence_max_len = min(max_len, int((src != pad_idx).sum().item()) + 50)
+
                 prediction = greedy_decode(
                     model=model,
                     src=src,
                     src_mask=src_mask,
-                    max_len=max_len,
+                    max_len=sentence_max_len,
                     start_symbol=start_symbol,
                     end_symbol=end_symbol,
                     device=device,

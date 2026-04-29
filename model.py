@@ -65,6 +65,7 @@ def scaled_dot_product_attention(
         scores = scores.masked_fill(mask, float("-inf"))
 
     attention_weights = torch.softmax(scores, dim=-1)
+    attention_weights = torch.nan_to_num(attention_weights, nan=0.0)
 
     output = torch.matmul(attention_weights, V)
 
@@ -237,7 +238,7 @@ class PositionalEncoding(nn.Module):
         )
 
         pe[:, 0::2] = torch.sin(position * div_term)
-        pe[:, 1::2] = torch.cos(position * div_term)
+        pe[:, 1::2] = torch.cos(position * div_term[:pe[:, 1::2].size(1)])
 
         pe = pe.unsqueeze(0)
 
