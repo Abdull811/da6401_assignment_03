@@ -642,18 +642,20 @@ def run_training_experiment() -> None:
         "d_ff": 2048,
         "dropout": 0.1,
         "warmup_steps": 4000,
-        "learning_rate": 1.0,
+        "learning_rate": 0.5,
         "use_noam_scheduler": True, # False
         "fixed_learning_rate": 1e-4,
         "label_smoothing": 0.1,
         "use_scaling": True,
         "use_learned_positional": False,
-        "tie_embeddings": True,
+        "tie_embeddings": False,
         "min_freq": 2,
         "max_vocab_size": None,
         "num_workers": 0,
         "checkpoint_path": "best_checkpoint.pt",
         "max_decode_len": 80,
+        "early_stop_patience": 4,
+        "divergence_factor": 1.75,
     }
 
     run = init_wandb(
@@ -757,6 +759,7 @@ def run_training_experiment() -> None:
 
     # training loop
     best_val_loss = float("inf")
+    epochs_without_improvement = 0
 
     for epoch in range(config.epochs):
         print(f"Epoch {epoch+1}/{config.epochs} started")
@@ -798,6 +801,7 @@ def run_training_experiment() -> None:
         # save best model only
         if val_loss < best_val_loss:
             best_val_loss = val_loss
+            epochs_without_improvement = 0
 
             save_checkpoint(
                 model,
@@ -808,6 +812,19 @@ def run_training_experiment() -> None:
             )
 
             print("Best model saved.")
+        else:
+            epochs_without_improvement += 1
+
+        if val_loss > best_val_loss * config.divergence_factor:
+            print(
+                "Validation loss diverged; stopping early and keeping "
+                "the best checkpoint."
+            )
+            break
+
+        if epochs_without_improvement >= config.early_stop_patience:
+            print("No validation improvement; stopping early.")
+            break
 
     if os.path.exists(config.checkpoint_path):
         load_checkpoint(config.checkpoint_path, model, device=device)

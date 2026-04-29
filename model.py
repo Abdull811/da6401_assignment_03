@@ -521,7 +521,7 @@ class Transformer(nn.Module):
         num_heads: int   = 8,
         use_learned_positional = False,
         use_scaling: bool = True,
-        tie_embeddings: bool = True,
+        tie_embeddings: bool = False,
         d_ff:      int   = 2048,
         dropout:   float = 0.1,
     ) -> None:
