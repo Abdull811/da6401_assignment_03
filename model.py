@@ -16,11 +16,24 @@ AUTOGRADER CONTRACT (DO NOT MODIFY SIGNATURES):
 
 import math
 import copy
-from typing import Optional, Tuple
+import os
+from typing import Any, Dict, List, Optional, Tuple
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+
+
+PAD_IDX = 1
+SOS_IDX = 2
+EOS_IDX = 3
+UNK_IDX = 0
+
+# Fill this with your public Google Drive file id before submission, or set
+# TRANSFORMER_ARTIFACT_FILE_ID in the environment. The file should be a
+# checkpoint saved by save_checkpoint in train.py after this update.
+DEFAULT_PRETRAINED_FILE_ID = ""
+DEFAULT_PRETRAINED_PATH = "transformer_artifact.pt"
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -514,8 +527,8 @@ class Transformer(nn.Module):
 
     def __init__(
         self,
-        src_vocab_size: int,
-        tgt_vocab_size: int,
+        src_vocab_size: Optional[int] = None,
+        tgt_vocab_size: Optional[int] = None,
         d_model:   int   = 512,
         N:         int   = 6,
         num_heads: int   = 8,
@@ -524,8 +537,59 @@ class Transformer(nn.Module):
         tie_embeddings: bool = False,
         d_ff:      int   = 2048,
         dropout:   float = 0.1,
+        checkpoint_path: Optional[str] = None,
+        checkpoint_file_id: Optional[str] = None,
+        load_pretrained: Optional[bool] = None,
+        max_decode_len: int = 100,
     ) -> None:
         super().__init__()
+        self.max_decode_len = max_decode_len
+        self.src_vocab: Dict[str, int] = {}
+        self.tgt_vocab: Dict[str, int] = {}
+        self.src_itos: List[str] = []
+        self.tgt_itos: List[str] = []
+        self.spacy_de = None
+        self.spacy_en = None
+
+        artifact = None
+        if load_pretrained is None:
+            load_pretrained = src_vocab_size is None or tgt_vocab_size is None
+
+        if load_pretrained:
+            artifact = self._load_pretrained_artifact(
+                checkpoint_path=checkpoint_path,
+                checkpoint_file_id=checkpoint_file_id,
+            )
+            if artifact is not None:
+                model_config = artifact.get("model_config", {})
+                src_vocab_size = model_config.get("src_vocab_size", src_vocab_size)
+                tgt_vocab_size = model_config.get("tgt_vocab_size", tgt_vocab_size)
+                d_model = model_config.get("d_model", d_model)
+                N = model_config.get("N", model_config.get("num_layers", N))
+                num_heads = model_config.get("num_heads", num_heads)
+                d_ff = model_config.get("d_ff", d_ff)
+                dropout = model_config.get("dropout", dropout)
+                use_learned_positional = model_config.get(
+                    "use_learned_positional",
+                    use_learned_positional
+                )
+                use_scaling = model_config.get("use_scaling", use_scaling)
+                tie_embeddings = model_config.get("tie_embeddings", tie_embeddings)
+                max_decode_len = model_config.get("max_decode_len", max_decode_len)
+                self.max_decode_len = max_decode_len
+                self._restore_vocab_from_artifact(artifact)
+
+        if not self.src_vocab or not self.tgt_vocab:
+            self._build_fallback_vocab(src_vocab_size, tgt_vocab_size)
+
+        src_vocab_size = src_vocab_size or len(self.src_itos)
+        tgt_vocab_size = tgt_vocab_size or len(self.tgt_itos)
+
+        if src_vocab_size is None or tgt_vocab_size is None:
+            raise ValueError("src_vocab_size and tgt_vocab_size could not be inferred.")
+
+        self._load_tokenizers()
+
         # TODO: Instantiate 
         self.d_model = d_model
         self.src_vocab_size = src_vocab_size
@@ -589,10 +653,94 @@ class Transformer(nn.Module):
 
         self._reset_parameters()
         with torch.no_grad():
-            self.src_embedding.weight[1].zero_()
-            self.tgt_embedding.weight[1].zero_()
+            self.src_embedding.weight[PAD_IDX].zero_()
+            self.tgt_embedding.weight[PAD_IDX].zero_()
         if tie_embeddings:
             self.fc_out.weight = self.tgt_embedding.weight
+
+        if artifact is not None and "model_state_dict" in artifact:
+            self.load_state_dict(artifact["model_state_dict"], strict=True)
+
+    def _load_pretrained_artifact(
+        self,
+        checkpoint_path: Optional[str] = None,
+        checkpoint_file_id: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        path = (
+            checkpoint_path
+            or os.environ.get("TRANSFORMER_ARTIFACT_PATH")
+            or DEFAULT_PRETRAINED_PATH
+        )
+        file_id = (
+            checkpoint_file_id
+            or os.environ.get("TRANSFORMER_ARTIFACT_FILE_ID")
+            or DEFAULT_PRETRAINED_FILE_ID
+        )
+
+        if not os.path.exists(path) and file_id:
+            try:
+                import gdown
+            except ImportError as exc:
+                raise ImportError(
+                    "gdown is required to download pretrained weights. "
+                    "Add it to requirements.txt or upload a local artifact."
+                ) from exc
+
+            gdown.download(id=file_id, output=path, quiet=False, fuzzy=True)
+
+        if not os.path.exists(path):
+            return None
+
+        return torch.load(path, map_location="cpu")
+
+    def _restore_vocab_from_artifact(self, artifact: Dict[str, Any]) -> None:
+        self.src_itos = list(artifact.get("src_itos") or [])
+        self.tgt_itos = list(artifact.get("tgt_itos") or [])
+
+        self.src_vocab = dict(artifact.get("src_vocab") or {})
+        self.tgt_vocab = dict(artifact.get("tgt_vocab") or {})
+
+        if not self.src_vocab and self.src_itos:
+            self.src_vocab = {token: idx for idx, token in enumerate(self.src_itos)}
+        if not self.tgt_vocab and self.tgt_itos:
+            self.tgt_vocab = {token: idx for idx, token in enumerate(self.tgt_itos)}
+
+    def _build_fallback_vocab(
+        self,
+        src_vocab_size: Optional[int],
+        tgt_vocab_size: Optional[int],
+    ) -> None:
+        specials = ["<unk>", "<pad>", "<sos>", "<eos>"]
+        src_size = max(src_vocab_size or len(specials), len(specials))
+        tgt_size = max(tgt_vocab_size or len(specials), len(specials))
+
+        self.src_itos = specials + [
+            f"<src_extra_{idx}>"
+            for idx in range(src_size - len(specials))
+        ]
+        self.tgt_itos = specials + [
+            f"<tgt_extra_{idx}>"
+            for idx in range(tgt_size - len(specials))
+        ]
+        self.src_vocab = {token: idx for idx, token in enumerate(self.src_itos)}
+        self.tgt_vocab = {token: idx for idx, token in enumerate(self.tgt_itos)}
+
+    def _load_tokenizers(self) -> None:
+        try:
+            import spacy
+
+            try:
+                self.spacy_de = spacy.load("de_core_news_sm")
+            except OSError:
+                self.spacy_de = spacy.blank("de")
+
+            try:
+                self.spacy_en = spacy.load("en_core_web_sm")
+            except OSError:
+                self.spacy_en = spacy.blank("en")
+        except Exception:
+            self.spacy_de = None
+            self.spacy_en = None
 
     def _reset_parameters(self) -> None:
         for param in self.parameters():
@@ -689,3 +837,67 @@ class Transformer(nn.Module):
         memory = self.encode(src, src_mask)
         output = self.decode(memory, src_mask, tgt, tgt_mask)
         return output
+
+    def _tokenize_de(self, sentence: str) -> List[str]:
+        if self.spacy_de is not None:
+            return [tok.text.lower() for tok in self.spacy_de.tokenizer(sentence)]
+        return sentence.lower().strip().split()
+
+    def _ids_to_english(self, token_ids: List[int]) -> str:
+        words = []
+        for token_id in token_ids:
+            if token_id in (SOS_IDX, EOS_IDX, PAD_IDX):
+                continue
+            if 0 <= token_id < len(self.tgt_itos):
+                token = self.tgt_itos[token_id]
+            else:
+                token = "<unk>"
+            if token != "<unk>":
+                words.append(token)
+        return " ".join(words)
+
+    def infer(self, german_sentence: str) -> str:
+        """
+        Translate one German sentence into English.
+
+        This is the end-to-end inference hook expected by the autograder:
+        tokenize German text, run encoder-decoder autoregressive decoding,
+        detokenize target ids, and return a single English sentence.
+        """
+        if not isinstance(german_sentence, str):
+            raise TypeError("german_sentence must be a string")
+
+        device = next(self.parameters()).device
+        tokens = self._tokenize_de(german_sentence)
+        src_ids = [SOS_IDX]
+        src_ids.extend(self.src_vocab.get(token, UNK_IDX) for token in tokens)
+        src_ids.append(EOS_IDX)
+
+        src = torch.tensor(src_ids, dtype=torch.long, device=device).unsqueeze(0)
+        src_mask = make_src_mask(src, PAD_IDX)
+
+        was_training = self.training
+        self.eval()
+        generated = [SOS_IDX]
+
+        with torch.no_grad():
+            memory = self.encode(src, src_mask)
+            max_len = max(2, self.max_decode_len)
+
+            for _ in range(max_len - 1):
+                tgt = torch.tensor(
+                    generated,
+                    dtype=torch.long,
+                    device=device
+                ).unsqueeze(0)
+                tgt_mask = make_tgt_mask(tgt, PAD_IDX)
+                logits = self.decode(memory, src_mask, tgt, tgt_mask)
+                next_id = int(torch.argmax(logits[:, -1, :], dim=-1).item())
+                generated.append(next_id)
+                if next_id == EOS_IDX:
+                    break
+
+        if was_training:
+            self.train()
+
+        return self._ids_to_english(generated)

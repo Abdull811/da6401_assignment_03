@@ -551,7 +551,12 @@ def save_checkpoint(
                 "use_learned_positional": model.use_learned_positional,
                 "use_scaling": model.use_scaling,
                 "tie_embeddings": model.tie_embeddings,
+                "max_decode_len": getattr(model, "max_decode_len", 100),
             },
+            "src_vocab": getattr(model, "src_vocab", None),
+            "tgt_vocab": getattr(model, "tgt_vocab", None),
+            "src_itos": getattr(model, "src_itos", None),
+            "tgt_itos": getattr(model, "tgt_itos", None),
         },
         path
     )
@@ -742,7 +747,13 @@ def run_training_experiment() -> None:
         use_learned_positional=config.use_learned_positional,
         use_scaling=config.use_scaling,
         tie_embeddings=config.tie_embeddings,
+        load_pretrained=False,
+        max_decode_len=config.max_decode_len,
     ).to(device)
+    model.src_vocab = train_data.src_vocab
+    model.tgt_vocab = train_data.tgt_vocab
+    model.src_itos = train_data.src_itos
+    model.tgt_itos = train_data.tgt_itos
 
     # optimizer
     optimizer = torch.optim.Adam(
