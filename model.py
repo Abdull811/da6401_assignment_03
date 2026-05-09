@@ -29,9 +29,7 @@ SOS_IDX = 2
 EOS_IDX = 3
 UNK_IDX = 0
 
-# Fill this with your public Google Drive file id before submission, or set
-# TRANSFORMER_ARTIFACT_FILE_ID in the environment. The file should be a
-# checkpoint saved by save_checkpoint in train.py after this update.
+# checkpoint saved 
 DEFAULT_PRETRAINED_FILE_ID = ""
 DEFAULT_PRETRAINED_PATH = "transformer_artifact.pt"
 
