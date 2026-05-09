@@ -29,7 +29,8 @@ SOS_IDX = 2
 EOS_IDX = 3
 UNK_IDX = 0
 
-# checkpoint saved 
+
+# checkpoint saved by save_checkpoint in train.py after this update.
 DEFAULT_PRETRAINED_FILE_ID = ""
 DEFAULT_PRETRAINED_PATH = ""
 
