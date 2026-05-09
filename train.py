@@ -231,6 +231,8 @@ def run_epoch(
         model.eval()
 
     total_loss = 0
+    total_correct = 0
+    total_tokens = 0
 
     grad_context = nullcontext() if is_train else torch.no_grad()
 
@@ -262,6 +264,11 @@ def run_epoch(
             tgt_output = tgt_output.contiguous().view(-1)
 
             non_pad = tgt_output != 1
+            if non_pad.any():
+                predictions = torch.argmax(logits, dim=1)
+                total_correct += (predictions[non_pad] == tgt_output[non_pad]).sum().item()
+                total_tokens += non_pad.sum().item()
+
             step_for_logging = getattr(run_epoch, "global_step", 0)
             should_log_batch = (not is_train) or step_for_logging % 50 == 0
             if non_pad.any() and should_log_batch:
@@ -317,6 +324,11 @@ def run_epoch(
         total_loss += loss.item()
 
     avg_loss = total_loss / len(data_iter)
+    token_accuracy = total_correct / max(1, total_tokens)
+    safe_wandb_log({
+        "train_token_accuracy" if is_train else "val_token_accuracy": token_accuracy,
+        "epoch": epoch_num,
+    })
     return avg_loss
 
 
@@ -499,6 +511,71 @@ def evaluate_bleu(
 # ❺  CHECKPOINT UTILITIES  (autograder loads your model from disk)
 # ══════════════════════════════════════════════════════════════════════
 
+def log_encoder_attention_heatmaps(
+    model: Transformer,
+    src_sentence,
+    src_itos,
+    device: str = "cpu",
+    prefix: str = "encoder_attention",
+) -> None:
+    if wandb is None or wandb.run is None:
+        return
+
+    try:
+        import matplotlib.pyplot as plt
+    except Exception as exc:
+        print(f"Warning: attention heatmap logging skipped ({exc}).")
+        return
+
+    if isinstance(src_sentence, tuple):
+        src_sentence = src_sentence[0]
+
+    src_ids = [
+        int(token) for token in src_sentence
+        if int(token) != 1
+    ]
+    if not src_ids:
+        return
+
+    src = torch.tensor(
+        src_ids,
+        dtype=torch.long,
+        device=device
+    ).unsqueeze(0)
+    src_mask = make_src_mask(src)
+
+    model.eval()
+    with torch.no_grad():
+        model.encode(src, src_mask)
+
+    attn = getattr(model.encoder.layers[-1].self_attn, "attention_weights", None)
+    if attn is None:
+        print("Warning: attention weights were not available for heatmap logging.")
+        return
+
+    attn = attn.detach().cpu()[0]
+    tokens = [
+        vocab_lookup_token(src_itos, token_id)
+        for token_id in src_ids
+    ]
+
+    logs = {}
+    for head_idx in range(attn.size(0)):
+        fig, ax = plt.subplots(figsize=(8, 6))
+        image = ax.imshow(attn[head_idx].numpy(), aspect="auto", cmap="viridis")
+        ax.set_title(f"Last encoder layer head {head_idx}")
+        ax.set_xticks(range(len(tokens)))
+        ax.set_yticks(range(len(tokens)))
+        ax.set_xticklabels(tokens, rotation=90)
+        ax.set_yticklabels(tokens)
+        fig.colorbar(image, ax=ax)
+        fig.tight_layout()
+        logs[f"{prefix}/head_{head_idx}"] = wandb.Image(fig)
+        plt.close(fig)
+
+    safe_wandb_log(logs)
+
+
 def save_checkpoint(
     model: Transformer,
     optimizer: torch.optim.Optimizer,
@@ -664,6 +741,7 @@ def run_training_experiment() -> None:
         "num_workers": 0,
         "checkpoint_path": "best_checkpoint.pt",
         "max_decode_len": 80,
+        "log_attention_heatmaps": True,
         "early_stop_patience": 3,
         "divergence_factor": 1.35,
     }
@@ -858,6 +936,14 @@ def run_training_experiment() -> None:
         model.to(device)
     else:
         print("Warning: best checkpoint was not found; evaluating current model.")
+
+    if getattr(config, "log_attention_heatmaps", True):
+        log_encoder_attention_heatmaps(
+            model,
+            val_data[0],
+            train_data.src_itos,
+            device=device,
+        )
 
     # final BLEU
     bleu = evaluate_bleu(
