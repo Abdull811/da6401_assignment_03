@@ -31,7 +31,7 @@ UNK_IDX = 0
 
 # checkpoint saved 
 DEFAULT_PRETRAINED_FILE_ID = ""
-DEFAULT_PRETRAINED_PATH = "transformer_artifact.pt"
+DEFAULT_PRETRAINED_PATH = ""
 
 
 # ══════════════════════════════════════════════════════════════════════
