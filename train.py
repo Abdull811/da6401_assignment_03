@@ -938,9 +938,10 @@ def run_training_experiment() -> None:
         print("Warning: best checkpoint was not found; evaluating current model.")
 
     if getattr(config, "log_attention_heatmaps", True):
+        val_source = dataloader_source(val_data)
         log_encoder_attention_heatmaps(
             model,
-            val_data[0],
+            val_source[0],
             train_data.src_itos,
             device=device,
         )
