@@ -9,7 +9,10 @@ Formula:
 
 import torch
 import torch.optim as optim
-from torch.optim.lr_scheduler import LRScheduler
+try:
+    from torch.optim.lr_scheduler import LRScheduler
+except ImportError:
+    from torch.optim.lr_scheduler import _LRScheduler as LRScheduler
 
 
 # ─────────────────────────────────────────────
