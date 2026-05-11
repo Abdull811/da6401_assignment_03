@@ -32,6 +32,13 @@ wandb = None
 from lr_scheduler import NoamScheduler
 
 
+def torch_load_compat(path: str, map_location):
+    try:
+        return torch.load(path, map_location=map_location, weights_only=False)
+    except TypeError:
+        return torch.load(path, map_location=map_location)
+
+
 def safe_wandb_log(values: dict) -> None:
     if wandb is not None and wandb.run is not None:
         try:
@@ -189,9 +196,16 @@ def vocab_lookup_token(vocab, idx: int) -> str:
         return vocab.tgt_itos[idx] if idx < len(vocab.tgt_itos) else "<unk>"
     if isinstance(vocab, (list, tuple)):
         return vocab[idx] if idx < len(vocab) else "<unk>"
+    if isinstance(vocab, dict):
+        if idx in vocab:
+            return vocab[idx]
+        for token, token_idx in vocab.items():
+            if token_idx == idx:
+                return token
+        return "<unk>"
     if hasattr(vocab, "lookup_token"):
         return vocab.lookup_token(idx)
-    raise TypeError("tgt_vocab must provide itos, tgt_itos, lookup_token, or be a list")
+    raise TypeError("tgt_vocab must provide itos, tgt_itos, lookup_token, be a list, or be a dict")
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -662,14 +676,15 @@ def load_checkpoint(
 
     """
     # TODO: implement restore logic
-    checkpoint = torch.load(
-        path,
-        map_location=device
-    )
+    checkpoint = torch_load_compat(path, map_location=device)
 
     model.load_state_dict(
         checkpoint["model_state_dict"]
     )
+
+    for attr in ("src_vocab", "tgt_vocab", "src_itos", "tgt_itos"):
+        if attr in checkpoint and checkpoint[attr] is not None:
+            setattr(model, attr, checkpoint[attr])
 
     if optimizer is not None and checkpoint.get("optimizer_state_dict") is not None:
         optimizer.load_state_dict(
