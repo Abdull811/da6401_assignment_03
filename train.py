@@ -22,6 +22,7 @@ from typing import Optional
 from collections import Counter
 import math
 import os
+import random
 from types import SimpleNamespace
 import inspect
 from contextlib import nullcontext
@@ -37,6 +38,15 @@ def torch_load_compat(path: str, map_location):
         return torch.load(path, map_location=map_location, weights_only=False)
     except TypeError:
         return torch.load(path, map_location=map_location)
+
+
+def seed_everything(seed: int) -> None:
+    random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+    torch.backends.cudnn.benchmark = False
+    torch.backends.cudnn.deterministic = True
 
 
 def safe_wandb_log(values: dict) -> None:
@@ -244,7 +254,7 @@ def run_epoch(
     else:
         model.eval()
 
-    total_loss = 0
+    total_loss = 0.0
     total_correct = 0
     total_tokens = 0
 
@@ -278,10 +288,11 @@ def run_epoch(
             tgt_output = tgt_output.contiguous().view(-1)
 
             non_pad = tgt_output != 1
+            non_pad_count = int(non_pad.sum().item())
             if non_pad.any():
                 predictions = torch.argmax(logits, dim=1)
                 total_correct += (predictions[non_pad] == tgt_output[non_pad]).sum().item()
-                total_tokens += non_pad.sum().item()
+                total_tokens += non_pad_count
 
             step_for_logging = getattr(run_epoch, "global_step", 0)
             should_log_batch = (not is_train) or step_for_logging % 50 == 0
@@ -335,9 +346,15 @@ def run_epoch(
             if scheduler is not None:
                 scheduler.step()
 
-        total_loss += loss.item()
+            if step % 50 == 0:
+                safe_wandb_log({
+                    "learning_rate": optimizer.param_groups[0]["lr"],
+                    "train_step": step,
+                })
 
-    avg_loss = total_loss / len(data_iter)
+        total_loss += loss.item() * max(1, non_pad_count)
+
+    avg_loss = total_loss / max(1, total_tokens)
     token_accuracy = total_correct / max(1, total_tokens)
     safe_wandb_log({
         "train_token_accuracy" if is_train else "val_token_accuracy": token_accuracy,
@@ -517,7 +534,7 @@ def evaluate_bleu(
 
     bleu_score = corpus_bleu_score(predictions, references)
 
-    print(f"Test BLEU Score: {bleu_score:.2f}")
+    print(f"BLEU Score: {bleu_score:.2f}")
 
     return bleu_score
 
@@ -738,15 +755,16 @@ def run_training_experiment() -> None:
 
     # W&B config
     default_config = {
+        "seed": 42,
         "batch_size": 32,
         "epochs": 40,
         "d_model": 512,
         "num_layers": 6,
         "num_heads": 8,
         "d_ff": 2048,
-        "dropout": 0.15,
-        "warmup_steps": 4000,
-        "learning_rate": 1.0,
+        "dropout": 0.1,
+        "warmup_steps": 8000,
+        "learning_rate": 0.7,
         "use_noam_scheduler": True, # False
         "fixed_learning_rate": 1e-4,
         "label_smoothing": 0.1,
@@ -773,11 +791,13 @@ def run_training_experiment() -> None:
     )
 
     config = wandb.config if run is not None else SimpleNamespace(**default_config)
+    seed_everything(int(getattr(config, "seed", 42)))
 
     print(
         "Training config: "
         f"lr={config.learning_rate}, warmup={config.warmup_steps}, "
         f"epochs={config.epochs}, batch_size={config.batch_size}, "
+        f"dropout={config.dropout}, "
         f"tie_embeddings={config.tie_embeddings}, "
         f"divergence_factor={config.divergence_factor}"
     )
@@ -885,6 +905,7 @@ def run_training_experiment() -> None:
     best_val_loss = float("inf")
     best_val_bleu = -1.0
     epochs_without_improvement = 0
+    run_epoch.global_step = 0
 
     for epoch in range(config.epochs):
         print(f"Epoch {epoch+1}/{config.epochs} started")
