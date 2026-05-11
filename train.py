@@ -2,17 +2,17 @@
 train.py — Training Pipeline, Inference & Evaluation
 DA6401 Assignment 3: "Attention Is All You Need"
 
+
 AUTOGRADER CONTRACT (DO NOT MODIFY SIGNATURES):
-  ┌─────────────────────────────────────────────────────────────────────┐
-  │  greedy_decode(model, src, src_mask, max_len, start_symbol)         │
-  │      → torch.Tensor  shape [1, out_len]  (token indices)            │
-  │                                                                     │
-  │  evaluate_bleu(model, test_dataloader, tgt_vocab, device)           │
-  │      → float  (corpus-level BLEU score, 0–100)                      │
-  │                                                                     │
-  │  save_checkpoint(model, optimizer, scheduler, epoch, path) → None   │
-  │  load_checkpoint(path, model, optimizer, scheduler)        → int    │
-  └─────────────────────────────────────────────────────────────────────┘
+  ┌─────────────────────────────────────────────────────────────────┐
+  │  scaled_dot_product_attention(Q, K, V, mask) → (out, weights)  │
+  │  MultiHeadAttention.forward(q, k, v, mask)   → Tensor          │
+  │  PositionalEncoding.forward(x)               → Tensor          │
+  │  make_src_mask(src, pad_idx)                 → BoolTensor      │
+  │  make_tgt_mask(tgt, pad_idx)                 → BoolTensor      │
+  │  Transformer.encode(src, src_mask)           → Tensor          │
+  │  Transformer.decode(memory,src_m,tgt,tgt_m)  → Tensor          │
+  └─────────────────────────────────────────────────────────────────┘
 """
 
 import torch
