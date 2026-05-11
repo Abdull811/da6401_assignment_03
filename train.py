@@ -629,6 +629,8 @@ def save_checkpoint(
                 "use_scaling": model.use_scaling,
                 "tie_embeddings": model.tie_embeddings,
                 "max_decode_len": getattr(model, "max_decode_len", 100),
+                "beam_size": getattr(model, "beam_size", 4),
+                "length_penalty": getattr(model, "length_penalty", 0.6),
             },
             "src_vocab": getattr(model, "src_vocab", None),
             "tgt_vocab": getattr(model, "tgt_vocab", None),
@@ -722,27 +724,31 @@ def run_training_experiment() -> None:
     # W&B config
     default_config = {
         "batch_size": 32,
-        "epochs": 30,
+        "epochs": 40,
         "d_model": 512,
         "num_layers": 6,
         "num_heads": 8,
         "d_ff": 2048,
-        "dropout": 0.1,
-        "warmup_steps": 8000,
-        "learning_rate": 0.2,
+        "dropout": 0.15,
+        "warmup_steps": 4000,
+        "learning_rate": 1.0,
         "use_noam_scheduler": True, # False
         "fixed_learning_rate": 1e-4,
         "label_smoothing": 0.1,
         "use_scaling": True,
         "use_learned_positional": False,
         "tie_embeddings": False,
+        "beam_size": 4,
+        "length_penalty": 0.6,
         "min_freq": 2,
         "max_vocab_size": None,
         "num_workers": 0,
         "checkpoint_path": "best_checkpoint.pt",
         "max_decode_len": 80,
         "log_attention_heatmaps": True,
-        "early_stop_patience": 3,
+        "selection_metric": "val_bleu",
+        "val_bleu_every": 1,
+        "early_stop_patience": 5,
         "divergence_factor": 1.35,
     }
 
@@ -827,6 +833,8 @@ def run_training_experiment() -> None:
         tie_embeddings=config.tie_embeddings,
         load_pretrained=False,
         max_decode_len=config.max_decode_len,
+        beam_size=config.beam_size,
+        length_penalty=config.length_penalty,
     ).to(device)
     model.src_vocab = train_data.src_vocab
     model.tgt_vocab = train_data.tgt_vocab
@@ -860,6 +868,7 @@ def run_training_experiment() -> None:
 
     # training loop
     best_val_loss = float("inf")
+    best_val_bleu = -1.0
     epochs_without_improvement = 0
 
     for epoch in range(config.epochs):
@@ -897,15 +906,36 @@ def run_training_experiment() -> None:
             print("Non-finite loss detected; stopping and keeping best checkpoint.")
             break
 
-        safe_wandb_log({
+        val_bleu = None
+        if (epoch + 1) % config.val_bleu_every == 0:
+            val_bleu = evaluate_bleu(
+                model,
+                val_loader,
+                train_data.tgt_itos,
+                device=device,
+                max_len=config.max_decode_len
+            )
+
+        log_values = {
             "epoch": epoch,
             "train_loss": train_loss,
-            "val_loss": val_loss
-        })
+            "val_loss": val_loss,
+        }
+        if val_bleu is not None:
+            log_values["val_bleu"] = val_bleu
+        safe_wandb_log(log_values)
 
         # save best model only
-        if val_loss < best_val_loss:
-            best_val_loss = val_loss
+        loss_improved = val_loss < best_val_loss
+        best_val_loss = min(best_val_loss, val_loss)
+        if config.selection_metric == "val_bleu":
+            improved = val_bleu is not None and val_bleu > best_val_bleu
+        else:
+            improved = loss_improved
+
+        if improved:
+            if val_bleu is not None:
+                best_val_bleu = val_bleu
             epochs_without_improvement = 0
 
             save_checkpoint(
@@ -916,7 +946,10 @@ def run_training_experiment() -> None:
                 path=config.checkpoint_path
             )
 
-            print("Best model saved.")
+            if val_bleu is None:
+                print(f"Best model saved. Val Loss = {val_loss:.4f}")
+            else:
+                print(f"Best model saved. Val BLEU = {val_bleu:.2f}")
         else:
             epochs_without_improvement += 1
 
