@@ -902,6 +902,7 @@ class Transformer(nn.Module):
                 log_probs = torch.log_softmax(logits, dim=-1).squeeze(0)
                 log_probs[PAD_IDX] = float("-inf")
                 log_probs[UNK_IDX] = float("-inf")
+                log_probs[SOS_IDX] = float("-inf")
 
                 top_scores, top_ids = torch.topk(log_probs, beam_size)
                 for next_score, next_id in zip(top_scores.tolist(), top_ids.tolist()):
