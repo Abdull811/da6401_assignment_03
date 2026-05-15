@@ -217,10 +217,9 @@ class MultiHeadAttention(nn.Module):
         K = K.view(batch_size, -1, self.num_heads, self.d_k).transpose(1, 2)
         V = V.view(batch_size, -1, self.num_heads, self.d_k).transpose(1, 2)
 
-        _, attn = scaled_dot_product_attention(Q, K, V, mask, self.use_scaling)
-        attn = self.dropout(attn)
-        x = torch.matmul(attn, V)
+        x, attn = scaled_dot_product_attention(Q, K, V, mask, self.use_scaling)
         self.attention_weights = attn
+        x = torch.matmul(self.dropout(attn), V)
 
         x = x.transpose(1, 2).contiguous()
         x = x.view(batch_size, -1, self.d_model)
