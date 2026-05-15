@@ -55,7 +55,7 @@ class NoamScheduler(LRScheduler):
         Compute the Noam scaling factor for the current step.
 
         Returns:
-            float: The scalar multiplier applied to the base learning rate.
+            float: The closed-form Noam learning rate for the current step.
 
         Hint:
             step = self.last_epoch + 1            # avoid step=0
@@ -83,14 +83,13 @@ class NoamScheduler(LRScheduler):
             list[float]: New learning rate for each param group in the optimizer.
 
         Hint:
-            Multiply each group's `base_lr` by the value from `_get_lr_scale()`.
-            Access base learning rates via `self.base_lrs`.
+            The assignment's scheduler is the closed-form Noam rate itself,
+            independent of the optimizer's initial learning rate.
         """
         # TODO: Return a list of scaled LRs, one per param group
         scale = self._get_lr_scale()
 
-        # multiply base learning rate with noam scale
-        return [base_lr * scale for base_lr in self.base_lrs]
+        return [scale for _ in self.optimizer.param_groups]
 
 
 # ──────────────────────────────────────────────────────────────────────
