@@ -489,20 +489,29 @@ def evaluate_bleu(
 
                 src_mask = make_src_mask(src)
 
-                # generate prediction using greedy decoding
+                # generate prediction using beam search when configured, otherwise greedy
                 sentence_max_len = min(max_len, int((src != pad_idx).sum().item()) + 50)
 
-                prediction = greedy_decode(
-                    model=model,
-                    src=src,
-                    src_mask=src_mask,
-                    max_len=sentence_max_len,
-                    start_symbol=start_symbol,
-                    end_symbol=end_symbol,
-                    device=device,
-                )
-
-                pred_tokens = prediction.squeeze(0).tolist()
+                beam_size = int(getattr(model, "beam_size", 1))
+                if beam_size > 1 and hasattr(model, "_beam_decode_ids"):
+                    memory = model.encode(src, src_mask)
+                    original_max_decode_len = getattr(model, "max_decode_len", max_len)
+                    model.max_decode_len = sentence_max_len
+                    try:
+                        pred_tokens = model._beam_decode_ids(memory, src_mask, torch.device(device))
+                    finally:
+                        model.max_decode_len = original_max_decode_len
+                else:
+                    prediction = greedy_decode(
+                        model=model,
+                        src=src,
+                        src_mask=src_mask,
+                        max_len=sentence_max_len,
+                        start_symbol=start_symbol,
+                        end_symbol=end_symbol,
+                        device=device,
+                    )
+                    pred_tokens = prediction.squeeze(0).tolist()
 
                 # remove special tokens from prediction
                 pred_tokens = [
