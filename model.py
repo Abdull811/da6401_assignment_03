@@ -31,8 +31,8 @@ UNK_IDX = 0
 
 
 # checkpoint saved by save_checkpoint in train.py after this update.
-DEFAULT_PRETRAINED_FILE_ID = ""
-DEFAULT_PRETRAINED_PATH = ""
+DEFAULT_PRETRAINED_FILE_ID = "1m_cMcMmxpVq04XqJtdB37ALxGRSAtKTr"
+DEFAULT_PRETRAINED_PATH = "pretrained_checkpoint.pt"
 
 
 def torch_load_compat(path: str, map_location):
