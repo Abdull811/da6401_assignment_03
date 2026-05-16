@@ -588,8 +588,8 @@ class Transformer(nn.Module):
                 tie_embeddings = model_config.get("tie_embeddings", tie_embeddings)
                 max_decode_len = model_config.get("max_decode_len", max_decode_len)
                 min_decode_len = model_config.get("min_decode_len", min_decode_len)
-                beam_size = model_config.get("beam_size", beam_size)
-                length_penalty = model_config.get("length_penalty", length_penalty)
+                beam_size = max(5, int(model_config.get("beam_size", beam_size)))
+                length_penalty = max(0.8, float(model_config.get("length_penalty", length_penalty)))
                 self.max_decode_len = max_decode_len
                 self.min_decode_len = min_decode_len
                 self.beam_size = beam_size
@@ -936,8 +936,10 @@ class Transformer(nn.Module):
 
             beams = sorted(candidates, key=normalized, reverse=True)[:beam_size]
 
+        complete_beams = [beam for beam in beams if beam[2]]
+        candidates = complete_beams if complete_beams else beams
         best_tokens, _, _ = max(
-            beams,
+            candidates,
             key=lambda item: item[1] / (max(1, len(item[0]) - 1) ** self.length_penalty)
         )
         return best_tokens
