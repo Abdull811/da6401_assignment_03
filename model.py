@@ -31,7 +31,7 @@ UNK_IDX = 0
 
 
 # Google Drive file id for the submitted checkpoint.
-DEFAULT_PRETRAINED_FILE_ID = "1m_cMcMmxpVq04XqJtdB37ALxGRSAtKTr"
+DEFAULT_PRETRAINED_FILE_ID = "1g6t10eKSIsqwrOL08dnzUT13DIHb6b36"
 DEFAULT_PRETRAINED_PATH = "pretrained_checkpoint.pt"
 
 
