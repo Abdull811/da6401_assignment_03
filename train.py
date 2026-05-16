@@ -549,7 +549,7 @@ def evaluate_bleu(
     return bleu_score
 
 # ══════════════════════════════════════════════════════════════════════
-# ❺  CHECKPOINT UTILITIES  (autograder loads your model from disk)
+#  CHECKPOINT UTILITIES  (autograder loads your model from disk)
 # ══════════════════════════════════════════════════════════════════════
 
 def log_encoder_attention_heatmaps(
@@ -764,37 +764,37 @@ def run_training_experiment() -> None:
     # device
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
-default_config = {
-    "seed": 42,
-    "batch_size": 64,
-    "epochs": 5,
-    "d_model": 256,
-    "num_layers": 4,
-    "num_heads": 4,
-    "d_ff": 1024,
-    "dropout": 0.15,
-    "warmup_steps": 4000,
-    "learning_rate": 3e-4,
-    "use_noam_scheduler": True,
-    "fixed_learning_rate": 3e-4,
-    "label_smoothing": 0.1,
-    "use_scaling": True,
-    "use_learned_positional": False,
-    "tie_embeddings": True,
-    "beam_size": 3,
-    "length_penalty": 0.7,
-    "min_decode_len": 1,
-    "min_freq": 2,
-    "max_vocab_size": None,
-    "num_workers": 0,
-    "checkpoint_path": "best_checkpoint.pt",
-    "max_decode_len": 60,
-    "log_attention_heatmaps": True,
-    "selection_metric": "val_loss",
-    "val_bleu_every": 1,
-    "early_stop_patience": 6,
-    "divergence_factor": 1.5,
-}
+    default_config = {
+        "seed": 42,
+        "batch_size": 64,
+        "epochs": 5,
+        "d_model": 256,
+        "num_layers": 4,
+        "num_heads": 4,
+        "d_ff": 1024,
+        "dropout": 0.15,
+        "warmup_steps": 4000,
+        "learning_rate": 3e-4,
+        "use_noam_scheduler": True,
+        "fixed_learning_rate": 3e-4,
+        "label_smoothing": 0.1,
+        "use_scaling": True,
+        "use_learned_positional": False,
+        "tie_embeddings": True,
+        "beam_size": 3,
+        "length_penalty": 0.7,
+        "min_decode_len": 1,
+        "min_freq": 2,
+        "max_vocab_size": None,
+        "num_workers": 0,
+        "checkpoint_path": "report_noam_checkpoint.pt",
+        "max_decode_len": 60,
+        "log_attention_heatmaps": True,
+        "selection_metric": "val_loss",
+        "val_bleu_every": 1,
+        "early_stop_patience": 6,
+        "divergence_factor": 1.5,
+    }
 
     run = init_wandb(
         project="da6401_Assigment_03_Weight_&_Bias",
