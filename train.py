@@ -497,17 +497,11 @@ def evaluate_bleu(
                 if beam_size > 1 and hasattr(model, "_beam_decode_ids"):
                     memory = model.encode(src, src_mask)
                     original_max_decode_len = getattr(model, "max_decode_len", max_len)
-                    original_min_decode_len = getattr(model, "min_decode_len", 1)
                     model.max_decode_len = sentence_max_len
-                    model.min_decode_len = min(
-                        sentence_max_len - 1,
-                        max(original_min_decode_len, int(src_len * 0.45))
-                    )
                     try:
                         pred_tokens = model._beam_decode_ids(memory, src_mask, torch.device(device))
                     finally:
                         model.max_decode_len = original_max_decode_len
-                        model.min_decode_len = original_min_decode_len
                 else:
                     prediction = greedy_decode(
                         model=model,
@@ -773,34 +767,34 @@ def run_training_experiment() -> None:
     # W&B config
     default_config = {
         "seed": 42,
-        "batch_size": 32,
-        "epochs": 60,
-        "d_model": 512,
-        "num_layers": 6,
-        "num_heads": 8,
-        "d_ff": 2048,
-        "dropout": 0.1,
+        "batch_size": 64,
+        "epochs": 30,
+        "d_model": 256,
+        "num_layers": 4,
+        "num_heads": 4,
+        "d_ff": 1024,
+        "dropout": 0.15,
         "warmup_steps": 4000,
         "learning_rate": 0.7,
-        "use_noam_scheduler": True, # False
-        "fixed_learning_rate": 1e-4,
-        "label_smoothing": 0.05,
+        "use_noam_scheduler": False,
+        "fixed_learning_rate": 3e-4,
+        "label_smoothing": 0.1,
         "use_scaling": True,
         "use_learned_positional": False,
         "tie_embeddings": True,
-        "beam_size": 5,
-        "length_penalty": 0.8,
-        "min_decode_len": 3,
-        "min_freq": 1,
+        "beam_size": 3,
+        "length_penalty": 0.7,
+        "min_decode_len": 1,
+        "min_freq": 2,
         "max_vocab_size": None,
         "num_workers": 0,
         "checkpoint_path": "best_checkpoint.pt",
-        "max_decode_len": 80,
-        "log_attention_heatmaps": True,
-        "selection_metric": "val_bleu",
-        "val_bleu_every": 1,
-        "early_stop_patience": 10,
-        "divergence_factor": 2.0,
+        "max_decode_len": 60,
+        "log_attention_heatmaps": False,
+        "selection_metric": "val_loss",
+        "val_bleu_every": 5,
+        "early_stop_patience": 6,
+        "divergence_factor": 1.5,
     }
 
     run = init_wandb(
@@ -808,7 +802,9 @@ def run_training_experiment() -> None:
         config=default_config
     )
 
-    config = wandb.config if run is not None else SimpleNamespace(**default_config)
+    if run is not None:
+        wandb.config.update(default_config, allow_val_change=True)
+    config = SimpleNamespace(**default_config)
     seed_everything(int(getattr(config, "seed", 42)))
 
     print(
