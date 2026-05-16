@@ -30,7 +30,7 @@ EOS_IDX = 3
 UNK_IDX = 0
 
 
-# checkpoint saved by save_checkpoint in train.py after this update.
+# Google Drive file id for the submitted checkpoint.
 DEFAULT_PRETRAINED_FILE_ID = "1m_cMcMmxpVq04XqJtdB37ALxGRSAtKTr"
 DEFAULT_PRETRAINED_PATH = "pretrained_checkpoint.pt"
 
@@ -706,7 +706,11 @@ class Transformer(nn.Module):
                     "Add it to requirements.txt or upload a local artifact."
                 ) from exc
 
-            gdown.download(id=file_id, output=path, quiet=False, fuzzy=True)
+            try:
+                gdown.download(id=file_id, output=path, quiet=False)
+            except TypeError:
+                url = f"https://drive.google.com/uc?id={file_id}"
+                gdown.download(url, output=path, quiet=False)
 
         if not path or not os.path.exists(path):
             return None
