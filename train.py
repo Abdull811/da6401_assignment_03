@@ -490,17 +490,24 @@ def evaluate_bleu(
                 src_mask = make_src_mask(src)
 
                 # generate prediction using beam search when configured, otherwise greedy
-                sentence_max_len = min(max_len, int((src != pad_idx).sum().item()) + 50)
+                src_len = int((src != pad_idx).sum().item())
+                sentence_max_len = min(max_len, src_len + 50)
 
                 beam_size = int(getattr(model, "beam_size", 1))
                 if beam_size > 1 and hasattr(model, "_beam_decode_ids"):
                     memory = model.encode(src, src_mask)
                     original_max_decode_len = getattr(model, "max_decode_len", max_len)
+                    original_min_decode_len = getattr(model, "min_decode_len", 1)
                     model.max_decode_len = sentence_max_len
+                    model.min_decode_len = min(
+                        sentence_max_len - 1,
+                        max(original_min_decode_len, int(src_len * 0.45))
+                    )
                     try:
                         pred_tokens = model._beam_decode_ids(memory, src_mask, torch.device(device))
                     finally:
                         model.max_decode_len = original_max_decode_len
+                        model.min_decode_len = original_min_decode_len
                 else:
                     prediction = greedy_decode(
                         model=model,
@@ -669,6 +676,7 @@ def save_checkpoint(
                 "use_scaling": model.use_scaling,
                 "tie_embeddings": model.tie_embeddings,
                 "max_decode_len": getattr(model, "max_decode_len", 100),
+                "min_decode_len": getattr(model, "min_decode_len", 3),
                 "beam_size": getattr(model, "beam_size", 4),
                 "length_penalty": getattr(model, "length_penalty", 0.6),
             },
@@ -766,23 +774,24 @@ def run_training_experiment() -> None:
     default_config = {
         "seed": 42,
         "batch_size": 32,
-        "epochs": 40,
+        "epochs": 60,
         "d_model": 512,
         "num_layers": 6,
         "num_heads": 8,
         "d_ff": 2048,
         "dropout": 0.1,
-        "warmup_steps": 8000,
+        "warmup_steps": 4000,
         "learning_rate": 0.7,
         "use_noam_scheduler": True, # False
         "fixed_learning_rate": 1e-4,
-        "label_smoothing": 0.1,
+        "label_smoothing": 0.05,
         "use_scaling": True,
         "use_learned_positional": False,
-        "tie_embeddings": False,
-        "beam_size": 4,
-        "length_penalty": 0.6,
-        "min_freq": 2,
+        "tie_embeddings": True,
+        "beam_size": 5,
+        "length_penalty": 0.8,
+        "min_decode_len": 3,
+        "min_freq": 1,
         "max_vocab_size": None,
         "num_workers": 0,
         "checkpoint_path": "best_checkpoint.pt",
@@ -790,8 +799,8 @@ def run_training_experiment() -> None:
         "log_attention_heatmaps": True,
         "selection_metric": "val_bleu",
         "val_bleu_every": 1,
-        "early_stop_patience": 5,
-        "divergence_factor": 1.35,
+        "early_stop_patience": 10,
+        "divergence_factor": 2.0,
     }
 
     run = init_wandb(
@@ -808,6 +817,8 @@ def run_training_experiment() -> None:
         f"epochs={config.epochs}, batch_size={config.batch_size}, "
         f"dropout={config.dropout}, "
         f"tie_embeddings={config.tie_embeddings}, "
+        f"beam_size={config.beam_size}, "
+        f"length_penalty={config.length_penalty}, "
         f"divergence_factor={config.divergence_factor}"
     )
 
@@ -877,6 +888,7 @@ def run_training_experiment() -> None:
         tie_embeddings=config.tie_embeddings,
         load_pretrained=False,
         max_decode_len=config.max_decode_len,
+        min_decode_len=config.min_decode_len,
         beam_size=config.beam_size,
         length_penalty=config.length_penalty,
     ).to(device)
