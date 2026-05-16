@@ -546,11 +546,13 @@ class Transformer(nn.Module):
         checkpoint_file_id: Optional[str] = None,
         load_pretrained: Optional[bool] = None,
         max_decode_len: int = 100,
+        min_decode_len: int = 3,
         beam_size: int = 4,
         length_penalty: float = 0.6,
     ) -> None:
         super().__init__()
         self.max_decode_len = max_decode_len
+        self.min_decode_len = min_decode_len
         self.beam_size = beam_size
         self.length_penalty = length_penalty
         self.src_vocab: Dict[str, int] = {}
@@ -585,9 +587,11 @@ class Transformer(nn.Module):
                 use_scaling = model_config.get("use_scaling", use_scaling)
                 tie_embeddings = model_config.get("tie_embeddings", tie_embeddings)
                 max_decode_len = model_config.get("max_decode_len", max_decode_len)
+                min_decode_len = model_config.get("min_decode_len", min_decode_len)
                 beam_size = model_config.get("beam_size", beam_size)
                 length_penalty = model_config.get("length_penalty", length_penalty)
                 self.max_decode_len = max_decode_len
+                self.min_decode_len = min_decode_len
                 self.beam_size = beam_size
                 self.length_penalty = length_penalty
                 self._restore_vocab_from_artifact(artifact)
@@ -880,6 +884,7 @@ class Transformer(nn.Module):
     ) -> List[int]:
         beam_size = max(1, int(self.beam_size))
         max_len = max(2, self.max_decode_len)
+        min_len = max(1, min(int(getattr(self, "min_decode_len", 1)), max_len - 1))
         beams = [([SOS_IDX], 0.0, False)]
 
         for _ in range(max_len - 1):
@@ -903,6 +908,8 @@ class Transformer(nn.Module):
                 log_probs[PAD_IDX] = float("-inf")
                 log_probs[UNK_IDX] = float("-inf")
                 log_probs[SOS_IDX] = float("-inf")
+                if len(token_ids) - 1 < min_len:
+                    log_probs[EOS_IDX] = float("-inf")
 
                 top_scores, top_ids = torch.topk(log_probs, beam_size)
                 for next_score, next_id in zip(top_scores.tolist(), top_ids.tolist()):
