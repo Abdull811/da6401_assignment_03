@@ -549,7 +549,7 @@ def evaluate_bleu(
     return bleu_score
 
 # ══════════════════════════════════════════════════════════════════════
-#  CHECKPOINT UTILITIES  (autograder loads your model from disk)
+# ❺  CHECKPOINT UTILITIES  (autograder loads your model from disk)
 # ══════════════════════════════════════════════════════════════════════
 
 def log_encoder_attention_heatmaps(
@@ -764,22 +764,23 @@ def run_training_experiment() -> None:
     # device
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
+    # W&B config
     default_config = {
         "seed": 42,
         "batch_size": 64,
-        "epochs": 5,
+        "epochs": 30,
         "d_model": 256,
         "num_layers": 4,
         "num_heads": 4,
         "d_ff": 1024,
         "dropout": 0.15,
         "warmup_steps": 4000,
-        "learning_rate": 3e-4,
-        "use_noam_scheduler": True,
+        "learning_rate": 0.7,
+        "use_noam_scheduler": False,
         "fixed_learning_rate": 3e-4,
-        "label_smoothing": 0.0,
+        "label_smoothing": 0.1,
         "use_scaling": True,
-        "use_learned_positional": True,
+        "use_learned_positional": False,
         "tie_embeddings": True,
         "beam_size": 3,
         "length_penalty": 0.7,
@@ -787,11 +788,11 @@ def run_training_experiment() -> None:
         "min_freq": 2,
         "max_vocab_size": None,
         "num_workers": 0,
-        "checkpoint_path": "report_label_smoothing_00_checkpoint.pt",
+        "checkpoint_path": "best_checkpoint.pt",
         "max_decode_len": 60,
-        "log_attention_heatmaps": True,
+        "log_attention_heatmaps": False,
         "selection_metric": "val_loss",
-        "val_bleu_every": 1,
+        "val_bleu_every": 5,
         "early_stop_patience": 6,
         "divergence_factor": 1.5,
     }
