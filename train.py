@@ -787,7 +787,7 @@ def run_training_experiment() -> None:
         "min_freq": 2,
         "max_vocab_size": None,
         "num_workers": 0,
-        "checkpoint_path": "checkpoint.pt",
+        "checkpoint_path": "report_sinusoidal_checkpoint.pt",
         "max_decode_len": 60,
         "log_attention_heatmaps": True,
         "selection_metric": "val_loss",
