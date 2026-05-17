@@ -27,8 +27,11 @@ Interactive experiment tracking, plots, gradient analysis, and attention visuali
 
 ## W&B Report
 
-W&B Report Link:  
-https://wandb.ai/ge26z811-zan/da6401_Assigment_03_Weight_&_Bias/reports/DA6401-Assignment-3-Implementing-the-Transformer-for-Machine-Translation--VmlldzoxNjkxMjE5OA
+- W&B Report Link:  
+  https://wandb.ai/ge26z811-zan/da6401_Assigment_03_Weight_&_Bias/reports/DA6401-Assignment-3-Implementing-the-Transformer-    for-Machine-Translation--VmlldzoxNjkxMjE5OA
+- Github Link:
+  https://github.com/Abdull811/da6401_assignment_03.git
+
 
 ---
 
